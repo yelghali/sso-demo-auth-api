@@ -20,9 +20,22 @@ resource "azurerm_storage_account" "frontend" {
   # Allow shared key for Terraform data-plane operations (blob upload)
   shared_access_key_enabled = false
 
-  # Allow public access for deployment; App Gateway reaches via PE
+  # Public access enabled but firewalled — only deployer IP allowed.
+  # App Gateway reaches via Private Endpoint (bypasses firewall).
+  # Static website endpoint (*.web.core.windows.net) is blocked from public internet.
   public_network_access_enabled   = true
   allow_nested_items_to_be_public = false
+
+  network_rules {
+    default_action = "Deny"
+    ip_rules       = [data.http.deployer_ip.response_body]
+    bypass         = ["AzureServices"]
+  }
+}
+
+# ─── Get deployer's public IP for firewall allowlist ─────────────
+data "http" "deployer_ip" {
+  url = "https://api.ipify.org"
 }
 
 # ─── Role: deploying user needs Blob Data Contributor for Entra-based access ─

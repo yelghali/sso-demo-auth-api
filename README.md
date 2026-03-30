@@ -13,10 +13,12 @@ End-to-end Single Sign-On demo: multiple React frontends sharing one hostname, b
 - [Managed Identities & Authentication](#managed-identities--authentication)
 - [APIs on Kubernetes](#apis-on-kubernetes)
 - [Two Ingress Strategies (Cost Comparison)](#two-ingress-strategies-cost-comparison)
+- [Storage Network Security](#storage-network-security)
 - [Network Layout](#network-layout)
 - [Resource Inventory](#resource-inventory)
 - [Prerequisites](#prerequisites)
 - [Deployment](#deployment)
+- [Live URLs](#live-urls)
 - [Testing](#testing)
 - [Tear Down](#tear-down)
 - [Project Structure](#project-structure)
@@ -291,6 +293,27 @@ AKS Cluster 2 (CNI Overlay):
 
 ---
 
+## Storage Network Security
+
+Static website endpoints (`*.z20.web.core.windows.net`) are **blocked from public internet** — only accessible through App Gateway via Private Endpoints.
+
+| Layer | What It Does |
+|-------|-------------|
+| `network_rules { default_action = "Deny" }` | Blocks all public access to the storage account, including the static website endpoint |
+| Private Endpoints (`web` sub-resource) | App Gateway reaches storage content through the VNet — PEs bypass the firewall |
+| Deployer IP in `ip_rules` | Auto-detected via `api.ipify.org` so Terraform can still upload HTML blobs |
+| `shared_access_key_enabled = false` | Enforced by tenant policy — data plane uses Entra ID auth (`storage_use_azuread = true`) |
+
+```
+Public internet → *.z20.web.core.windows.net   ❌  403 Forbidden (firewall)
+App Gateway     → Private Endpoint (VNet)       ✅  200 OK
+Terraform CLI   → Deployer IP allow-listed       ✅  Upload blobs
+```
+
+> **Note:** Azure Storage firewall rules (IP + VNet) apply to the static website endpoint (`$web`), unlike `allow_blob_public_access` and container ACLs which do **not** affect it.
+
+---
+
 ## Network Layout
 
 | Subnet | CIDR | Purpose |
@@ -357,6 +380,21 @@ az acr build --registry $(terraform output -raw acr_login_server) --image demo-a
 ```
 
 > **Note**: APIM Developer tier takes ~30-45 minutes to provision. The self-signed TLS cert will trigger a browser warning — expected for a demo.
+
+## Live URLs
+
+| Endpoint | URL |
+|----------|-----|
+| **Main Portal** | `https://20.119.248.71.sslip.io/` |
+| **Orders App** | `https://20.119.248.71.sslip.io/app1/` |
+| **Users App** | `https://20.119.248.71.sslip.io/app2/` |
+| **Products App** | `https://20.119.248.71.sslip.io/app3/` |
+| **API — AGC Orders** | `https://20.119.248.71.sslip.io/api/agc/orders/health` |
+| **API — Traefik Users** | `https://20.119.248.71.sslip.io/api/traefik/users/health` |
+
+> Self-signed cert triggers a browser warning — expected for the demo.
+
+---
 
 ## Testing
 
