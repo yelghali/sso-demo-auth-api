@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SSO Demo - Main Portal</title>
+    <script src="https://alcdn.msauth.net/browser/2.38.3/js/msal-browser.min.js"></script>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: 'Segoe UI', Tahoma, sans-serif; background: #f0f2f5; color: #333; }
+        .header { background: linear-gradient(135deg, #0078d4, #005a9e); color: #fff; padding: 24px 40px; }
+        .header h1 { font-size: 1.8rem; } .header p { opacity: 0.85; margin-top: 4px; }
+        .container { max-width: 960px; margin: 32px auto; padding: 0 20px; }
+        .card { background: #fff; border-radius: 10px; padding: 24px; margin-bottom: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+        .app-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-top: 16px; }
+        .app-link { display: block; text-align: center; padding: 32px 16px; background: #f8f9fa; border-radius: 8px;
+                    text-decoration: none; color: #0078d4; border: 2px solid transparent; transition: all 0.2s; }
+        .app-link:hover { border-color: #0078d4; background: #e8f4fd; transform: translateY(-2px); }
+        .app-link h3 { margin-bottom: 8px; }
+        .btn { background: #0078d4; color: #fff; border: none; padding: 10px 24px; border-radius: 6px;
+               cursor: pointer; font-size: 14px; margin: 4px; transition: background 0.2s; }
+        .btn:hover { background: #106ebe; }
+        .btn-danger { background: #d13438; } .btn-danger:hover { background: #a4262c; }
+        .btn-secondary { background: #6c757d; } .btn-secondary:hover { background: #5a6268; }
+        .user-bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+        .status { padding: 10px 16px; border-radius: 6px; font-weight: 500; }
+        .signed-in { background: #dff6dd; color: #107c10; }
+        .signed-out { background: #fed9cc; color: #d83b01; }
+        pre { background: #1e1e1e; color: #d4d4d4; padding: 16px; border-radius: 8px; overflow-x: auto;
+              margin-top: 12px; font-size: 13px; max-height: 300px; }
+        .api-section { margin-top: 16px; }
+        .api-section h3 { margin-bottom: 8px; font-size: 1rem; color: #555; }
+        hr { border: none; border-top: 1px solid #e0e0e0; margin: 12px 0; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>SSO Demo &mdash; Main Portal</h1>
+        <p>Single Sign-On across multiple applications with Entra ID</p>
+    </div>
+
+    <div class="container">
+        <!-- Auth Card -->
+        <div class="card">
+            <div class="user-bar">
+                <div class="status signed-out" id="status">Not signed in</div>
+                <button class="btn" id="loginBtn" onclick="login()">Sign In</button>
+                <button class="btn btn-danger" id="logoutBtn" onclick="logout()" style="display:none">Sign Out</button>
+            </div>
+        </div>
+
+        <!-- App Navigation -->
+        <div class="card">
+            <h2>Applications</h2>
+            <p>Click any app below &mdash; SSO means you won't need to sign in again.</p>
+            <div class="app-grid">
+                <a href="/app1/" class="app-link"><h3>&#128230; Orders App</h3><p>Manage orders</p></a>
+                <a href="/app2/" class="app-link"><h3>&#128101; Users App</h3><p>Manage users</p></a>
+                <a href="/app3/" class="app-link"><h3>&#128722; Products App</h3><p>Manage products</p></a>
+            </div>
+        </div>
+
+        <!-- API Testing -->
+        <div class="card">
+            <h2>Backend API Testing</h2>
+            <p>Compare APIs through both ingress paths (AGC vs Traefik):</p>
+
+            <div class="api-section">
+                <h3>Cluster 1 &mdash; App Gateway for Containers (AGC)</h3>
+                <button class="btn" onclick="callApi('/api/agc/orders')">Orders</button>
+                <button class="btn" onclick="callApi('/api/agc/users')">Users</button>
+                <button class="btn" onclick="callApi('/api/agc/products')">Products</button>
+            </div>
+            <hr>
+            <div class="api-section">
+                <h3>Cluster 2 &mdash; Traefik + Internal LB</h3>
+                <button class="btn btn-secondary" onclick="callApi('/api/traefik/orders')">Orders</button>
+                <button class="btn btn-secondary" onclick="callApi('/api/traefik/users')">Users</button>
+                <button class="btn btn-secondary" onclick="callApi('/api/traefik/products')">Products</button>
+            </div>
+
+            <pre id="api-output">// API response will appear here</pre>
+        </div>
+    </div>
+
+    <script>
+        const msalConfig = {
+            auth: {
+                clientId: "${client_id}",
+                authority: "https://login.microsoftonline.com/${tenant_id}",
+                redirectUri: "${base_url}/"
+            },
+            cache: { cacheLocation: "localStorage", storeAuthStateInCookie: true }
+        };
+        const msalInstance = new msal.PublicClientApplication(msalConfig);
+
+        msalInstance.handleRedirectPromise().then(handleResponse).catch(console.error);
+
+        function handleResponse(resp) {
+            const account = resp ? resp.account : msalInstance.getAllAccounts()[0];
+            if (account) showUser(account);
+        }
+
+        function login() {
+            msalInstance.loginRedirect({ scopes: ["openid", "profile", "email"] });
+        }
+        function logout() {
+            msalInstance.logoutRedirect();
+        }
+
+        function showUser(account) {
+            document.getElementById("status").className = "status signed-in";
+            document.getElementById("status").textContent = "Signed in: " + account.name + " (" + account.username + ")";
+            document.getElementById("loginBtn").style.display = "none";
+            document.getElementById("logoutBtn").style.display = "inline-block";
+        }
+
+        async function callApi(endpoint) {
+            const accounts = msalInstance.getAllAccounts();
+            if (!accounts.length) { alert("Please sign in first"); return; }
+            document.getElementById("api-output").textContent = "Loading...";
+            try {
+                const token = await msalInstance.acquireTokenSilent({
+                    scopes: ["${client_id}/.default"],
+                    account: accounts[0]
+                });
+                const res = await fetch(endpoint, {
+                    headers: { "Authorization": "Bearer " + token.accessToken }
+                });
+                const data = await res.json();
+                document.getElementById("api-output").textContent = JSON.stringify(data, null, 2);
+            } catch (err) {
+                document.getElementById("api-output").textContent = "Error: " + err.message;
+            }
+        }
+    </script>
+</body>
+</html>

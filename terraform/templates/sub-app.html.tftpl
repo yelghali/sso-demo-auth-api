@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SSO Demo - ${app_title}</title>
+    <script src="https://alcdn.msauth.net/browser/2.38.3/js/msal-browser.min.js"></script>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: 'Segoe UI', Tahoma, sans-serif; background: #f0f2f5; color: #333; }
+        .header { background: linear-gradient(135deg, ${app_color}, ${app_color_dark}); color: #fff; padding: 24px 40px; }
+        .header h1 { font-size: 1.8rem; } .header p { opacity: 0.85; margin-top: 4px; }
+        .container { max-width: 960px; margin: 32px auto; padding: 0 20px; }
+        .card { background: #fff; border-radius: 10px; padding: 24px; margin-bottom: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+        .btn { background: ${app_color}; color: #fff; border: none; padding: 10px 24px; border-radius: 6px;
+               cursor: pointer; font-size: 14px; margin: 4px; transition: background 0.2s; }
+        .btn:hover { background: ${app_color_dark}; }
+        .status { padding: 10px 16px; border-radius: 6px; font-weight: 500; }
+        .signed-in { background: #dff6dd; color: #107c10; }
+        .signed-out { background: #fed9cc; color: #d83b01; }
+        .checking { background: #fff4ce; color: #797673; }
+        pre { background: #1e1e1e; color: #d4d4d4; padding: 16px; border-radius: 8px; overflow-x: auto;
+              margin-top: 12px; font-size: 13px; max-height: 300px; }
+        a.back { color: #0078d4; text-decoration: none; font-weight: 500; }
+        a.back:hover { text-decoration: underline; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>${app_icon} ${app_title}</h1>
+        <p>${app_description}</p>
+    </div>
+
+    <div class="container">
+        <!-- SSO Status -->
+        <div class="card">
+            <div class="status checking" id="status">Checking SSO session...</div>
+            <button class="btn" id="loginBtn" onclick="login()" style="display:none;margin-top:12px">Sign In</button>
+        </div>
+
+        <!-- Navigation -->
+        <div class="card">
+            <a href="/" class="back">&larr; Back to Main Portal</a>
+        </div>
+
+        <!-- API Call -->
+        <div class="card">
+            <h2>${api_display_name} API</h2>
+            <p>Call the ${api_display_name} backend through both clusters:</p>
+            <button class="btn" onclick="callApi('/api/agc/${api_path}')">via AGC (Cluster 1)</button>
+            <button class="btn" onclick="callApi('/api/traefik/${api_path}')">via Traefik (Cluster 2)</button>
+            <pre id="api-output">// API response will appear here</pre>
+        </div>
+    </div>
+
+    <script>
+        const msalConfig = {
+            auth: {
+                clientId: "${client_id}",
+                authority: "https://login.microsoftonline.com/${tenant_id}",
+                redirectUri: "${base_url}/${app_path}/"
+            },
+            cache: { cacheLocation: "localStorage", storeAuthStateInCookie: true }
+        };
+        const msalInstance = new msal.PublicClientApplication(msalConfig);
+
+        msalInstance.handleRedirectPromise().then(handleResponse).catch(console.error);
+
+        function handleResponse(resp) {
+            const account = resp ? resp.account : msalInstance.getAllAccounts()[0];
+            if (account) {
+                document.getElementById("status").className = "status signed-in";
+                document.getElementById("status").textContent = "SSO Active - Signed in: " + account.name + " (" + account.username + ")";
+            } else {
+                document.getElementById("status").className = "status signed-out";
+                document.getElementById("status").textContent = "No SSO session found - please sign in";
+                document.getElementById("loginBtn").style.display = "inline-block";
+            }
+        }
+
+        function login() {
+            msalInstance.loginRedirect({ scopes: ["openid", "profile", "email"] });
+        }
+
+        async function callApi(endpoint) {
+            const accounts = msalInstance.getAllAccounts();
+            if (!accounts.length) { alert("Please sign in first"); return; }
+            document.getElementById("api-output").textContent = "Loading...";
+            try {
+                const token = await msalInstance.acquireTokenSilent({
+                    scopes: ["${client_id}/.default"],
+                    account: accounts[0]
+                });
+                const res = await fetch(endpoint, {
+                    headers: { "Authorization": "Bearer " + token.accessToken }
+                });
+                const data = await res.json();
+                document.getElementById("api-output").textContent = JSON.stringify(data, null, 2);
+            } catch (err) {
+                document.getElementById("api-output").textContent = "Error: " + err.message;
+            }
+        }
+    </script>
+</body>
+</html>

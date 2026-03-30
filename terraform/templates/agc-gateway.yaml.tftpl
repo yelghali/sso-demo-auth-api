@@ -1,0 +1,70 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: agc-gateway
+  namespace: ${namespace}
+  annotations:
+    alb.networking.azure.io/alb-id: ${agc_id}
+spec:
+  gatewayClassName: azure-alb-external
+  listeners:
+    - name: http
+      port: 80
+      protocol: HTTP
+      allowedRoutes:
+        namespaces:
+          from: Same
+  addresses:
+    - type: alb.networking.azure.io/alb-frontend
+      value: ${frontend_name}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: orders-route
+  namespace: ${namespace}
+spec:
+  parentRefs:
+    - name: agc-gateway
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /orders
+      backendRefs:
+        - name: api-orders
+          port: 8080
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: users-route
+  namespace: ${namespace}
+spec:
+  parentRefs:
+    - name: agc-gateway
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /users
+      backendRefs:
+        - name: api-users
+          port: 8080
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: products-route
+  namespace: ${namespace}
+spec:
+  parentRefs:
+    - name: agc-gateway
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /products
+      backendRefs:
+        - name: api-products
+          port: 8080

@@ -1,0 +1,18 @@
+# Terraform
+terraform/.terraform/
+terraform/.generated/
+terraform/*.tfstate
+terraform/*.tfstate.backup
+terraform/tfplan
+terraform/.kube/
+terraform/.terraform.lock.hcl
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+*.swp
+
+terraform/*.backup
