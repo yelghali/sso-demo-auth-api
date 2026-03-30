@@ -3,6 +3,9 @@
 resource "azuread_application" "main" {
   display_name = "${var.prefix}-spa"
 
+  # Emit Entra security groups in JWT tokens
+  group_membership_claims = ["SecurityGroup"]
+
   # SPA auth (MSAL.js) — redirect URIs use the App Gateway hostname
   single_page_application {
     redirect_uris = [
@@ -11,6 +14,18 @@ resource "azuread_application" "main" {
       "https://${local.hostname}/app2/",
       "https://${local.hostname}/app3/",
     ]
+  }
+
+  # Include groups claim in ID token
+  optional_claims {
+    id_token {
+      name                  = "groups"
+      additional_properties = ["emit_as_roles"]
+    }
+    access_token {
+      name                  = "groups"
+      additional_properties = ["emit_as_roles"]
+    }
   }
 
   # Expose an API scope for backend access

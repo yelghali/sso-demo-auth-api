@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>SSO Demo - Main Portal</title>
-    <script src="https://alcdn.msauth.net/browser/2.38.3/js/msal-browser.min.js"></script>
+    <script src="https://alcdn.msauth.net/browser/2.38.2/js/msal-browser.min.js"></script>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body { font-family: 'Segoe UI', Tahoma, sans-serif; background: #f0f2f5; color: #333; }
@@ -22,12 +22,19 @@
         .btn:hover { background: #106ebe; }
         .btn-danger { background: #d13438; } .btn-danger:hover { background: #a4262c; }
         .btn-secondary { background: #6c757d; } .btn-secondary:hover { background: #5a6268; }
+        .btn-token { background: #8b5cf6; } .btn-token:hover { background: #7c3aed; }
         .user-bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
         .status { padding: 10px 16px; border-radius: 6px; font-weight: 500; }
         .signed-in { background: #dff6dd; color: #107c10; }
         .signed-out { background: #fed9cc; color: #d83b01; }
         pre { background: #1e1e1e; color: #d4d4d4; padding: 16px; border-radius: 8px; overflow-x: auto;
-              margin-top: 12px; font-size: 13px; max-height: 300px; }
+              margin-top: 12px; font-size: 13px; max-height: 400px; }
+        .groups-list { margin-top: 8px; }
+        .groups-list span { display: inline-block; background: #e8f4fd; color: #0078d4;
+             padding: 4px 10px; border-radius: 12px; font-size: 12px; margin: 2px; }
+        .tab-bar { display: flex; gap: 4px; margin-bottom: 12px; }
+        .tab { padding: 8px 16px; border: none; background: #e0e0e0; border-radius: 6px 6px 0 0;
+               cursor: pointer; font-size: 13px; } .tab.active { background: #1e1e1e; color: #d4d4d4; }
         .api-section { margin-top: 16px; }
         .api-section h3 { margin-bottom: 8px; font-size: 1rem; color: #555; }
         hr { border: none; border-top: 1px solid #e0e0e0; margin: 12px 0; }
@@ -45,8 +52,10 @@
             <div class="user-bar">
                 <div class="status signed-out" id="status">Not signed in</div>
                 <button class="btn" id="loginBtn" onclick="login()">Sign In</button>
+                <button class="btn btn-token" id="tokenBtn" onclick="showToken()" style="display:none">&#128273; See My JWT Token</button>
                 <button class="btn btn-danger" id="logoutBtn" onclick="logout()" style="display:none">Sign Out</button>
             </div>
+            <div id="groups-container" style="display:none" class="groups-list"></div>
         </div>
 
         <!-- App Navigation -->
@@ -58,6 +67,18 @@
                 <a href="/app2/" class="app-link"><h3>&#128101; Users App</h3><p>Manage users</p></a>
                 <a href="/app3/" class="app-link"><h3>&#128722; Products App</h3><p>Manage products</p></a>
             </div>
+        </div>
+
+        <!-- JWT Token Viewer -->
+        <div class="card" id="token-card" style="display:none">
+            <h2>&#128273; JWT Token Inspector</h2>
+            <p>Your decoded ID token from Entra ID, including group memberships:</p>
+            <div class="tab-bar">
+                <button class="tab active" onclick="showTab('decoded')">Decoded</button>
+                <button class="tab" onclick="showTab('raw')">Raw Token</button>
+            </div>
+            <pre id="token-decoded"></pre>
+            <pre id="token-raw" style="display:none;word-break:break-all;white-space:pre-wrap"></pre>
         </div>
 
         <!-- API Testing -->
@@ -112,7 +133,49 @@
             document.getElementById("status").className = "status signed-in";
             document.getElementById("status").textContent = "Signed in: " + account.name + " (" + account.username + ")";
             document.getElementById("loginBtn").style.display = "none";
+            document.getElementById("tokenBtn").style.display = "inline-block";
             document.getElementById("logoutBtn").style.display = "inline-block";
+            // Show groups from idTokenClaims
+            const claims = account.idTokenClaims;
+            if (claims && claims.groups && claims.groups.length) {
+                const container = document.getElementById("groups-container");
+                container.style.display = "block";
+                container.innerHTML = "<strong>Groups:</strong> " +
+                    claims.groups.map(g => "<span>" + g + "</span>").join("");
+            }
+        }
+
+        function showToken() {
+            const accounts = msalInstance.getAllAccounts();
+            if (!accounts.length) return;
+            const account = accounts[0];
+            const claims = account.idTokenClaims;
+            const rawToken = msalInstance.getAccountByHomeId(account.homeAccountId);
+            // Decode the cached ID token from localStorage
+            const keys = Object.keys(localStorage);
+            let idToken = "";
+            for (const k of keys) {
+                if (k.includes("idtoken")) {
+                    try { const t = JSON.parse(localStorage.getItem(k)); if (t.secret) idToken = t.secret; } catch(e) {}
+                }
+            }
+            document.getElementById("token-card").style.display = "block";
+            document.getElementById("token-decoded").textContent = JSON.stringify(claims, null, 2);
+            document.getElementById("token-raw").textContent = idToken || "(token not found in cache)";
+            document.getElementById("token-card").scrollIntoView({ behavior: "smooth" });
+        }
+
+        function showTab(tab) {
+            document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
+            if (tab === "decoded") {
+                document.getElementById("token-decoded").style.display = "block";
+                document.getElementById("token-raw").style.display = "none";
+                event.target.classList.add("active");
+            } else {
+                document.getElementById("token-decoded").style.display = "none";
+                document.getElementById("token-raw").style.display = "block";
+                event.target.classList.add("active");
+            }
         }
 
         async function callApi(endpoint) {

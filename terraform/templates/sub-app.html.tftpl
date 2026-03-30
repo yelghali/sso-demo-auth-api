@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>SSO Demo - ${app_title}</title>
-    <script src="https://alcdn.msauth.net/browser/2.38.3/js/msal-browser.min.js"></script>
+    <script src="https://alcdn.msauth.net/browser/2.38.2/js/msal-browser.min.js"></script>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body { font-family: 'Segoe UI', Tahoma, sans-serif; background: #f0f2f5; color: #333; }
@@ -19,10 +19,17 @@
         .signed-in { background: #dff6dd; color: #107c10; }
         .signed-out { background: #fed9cc; color: #d83b01; }
         .checking { background: #fff4ce; color: #797673; }
+        .btn-token { background: #8b5cf6; } .btn-token:hover { background: #7c3aed; }
         pre { background: #1e1e1e; color: #d4d4d4; padding: 16px; border-radius: 8px; overflow-x: auto;
-              margin-top: 12px; font-size: 13px; max-height: 300px; }
+              margin-top: 12px; font-size: 13px; max-height: 400px; }
         a.back { color: #0078d4; text-decoration: none; font-weight: 500; }
         a.back:hover { text-decoration: underline; }
+        .groups-list { margin-top: 8px; }
+        .groups-list span { display: inline-block; background: #e8f4fd; color: #0078d4;
+             padding: 4px 10px; border-radius: 12px; font-size: 12px; margin: 2px; }
+        .tab-bar { display: flex; gap: 4px; margin-bottom: 12px; }
+        .tab { padding: 8px 16px; border: none; background: #e0e0e0; border-radius: 6px 6px 0 0;
+               cursor: pointer; font-size: 13px; } .tab.active { background: #1e1e1e; color: #d4d4d4; }
     </style>
 </head>
 <body>
@@ -36,6 +43,19 @@
         <div class="card">
             <div class="status checking" id="status">Checking SSO session...</div>
             <button class="btn" id="loginBtn" onclick="login()" style="display:none;margin-top:12px">Sign In</button>
+            <button class="btn btn-token" id="tokenBtn" onclick="showToken()" style="display:none;margin-top:12px">&#128273; See My JWT Token</button>
+            <div id="groups-container" style="display:none" class="groups-list"></div>
+        </div>
+
+        <!-- JWT Token Viewer -->
+        <div class="card" id="token-card" style="display:none">
+            <h2>&#128273; JWT Token Inspector</h2>
+            <div class="tab-bar">
+                <button class="tab active" onclick="showTab('decoded')">Decoded</button>
+                <button class="tab" onclick="showTab('raw')">Raw Token</button>
+            </div>
+            <pre id="token-decoded"></pre>
+            <pre id="token-raw" style="display:none;word-break:break-all;white-space:pre-wrap"></pre>
         </div>
 
         <!-- Navigation -->
@@ -71,6 +91,14 @@
             if (account) {
                 document.getElementById("status").className = "status signed-in";
                 document.getElementById("status").textContent = "SSO Active - Signed in: " + account.name + " (" + account.username + ")";
+                document.getElementById("tokenBtn").style.display = "inline-block";
+                const claims = account.idTokenClaims;
+                if (claims && claims.groups && claims.groups.length) {
+                    const container = document.getElementById("groups-container");
+                    container.style.display = "block";
+                    container.innerHTML = "<strong>Groups:</strong> " +
+                        claims.groups.map(g => "<span>" + g + "</span>").join("");
+                }
             } else {
                 document.getElementById("status").className = "status signed-out";
                 document.getElementById("status").textContent = "No SSO session found - please sign in";
@@ -80,6 +108,34 @@
 
         function login() {
             msalInstance.loginRedirect({ scopes: ["openid", "profile", "email"] });
+        }
+
+        function showToken() {
+            const accounts = msalInstance.getAllAccounts();
+            if (!accounts.length) return;
+            const claims = accounts[0].idTokenClaims;
+            let idToken = "";
+            for (const k of Object.keys(localStorage)) {
+                if (k.includes("idtoken")) {
+                    try { const t = JSON.parse(localStorage.getItem(k)); if (t.secret) idToken = t.secret; } catch(e) {}
+                }
+            }
+            document.getElementById("token-card").style.display = "block";
+            document.getElementById("token-decoded").textContent = JSON.stringify(claims, null, 2);
+            document.getElementById("token-raw").textContent = idToken || "(token not found in cache)";
+            document.getElementById("token-card").scrollIntoView({ behavior: "smooth" });
+        }
+
+        function showTab(tab) {
+            document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
+            if (tab === "decoded") {
+                document.getElementById("token-decoded").style.display = "block";
+                document.getElementById("token-raw").style.display = "none";
+            } else {
+                document.getElementById("token-decoded").style.display = "none";
+                document.getElementById("token-raw").style.display = "block";
+            }
+            event.target.classList.add("active");
         }
 
         async function callApi(endpoint) {

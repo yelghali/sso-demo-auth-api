@@ -1,6 +1,27 @@
 # SSO Demo — Multi-App Authentication with Azure
 
-Single Sign-On across multiple frontend apps sharing one hostname, with backend APIs on two AKS clusters using different ingress strategies.
+End-to-end Single Sign-On demo: multiple React frontends sharing one hostname, backend APIs on two AKS clusters (comparing AGC vs Traefik ingress), all fronted by Application Gateway WAF + APIM. Fully deployed with Terraform.
+
+---
+
+## Table of Contents
+
+- [Architecture](#architecture)
+- [SSO — How It Works](#sso--how-it-works)
+- [Entra ID App Registration](#entra-id-app-registration)
+- [JWT Token & Group Claims](#jwt-token--group-claims)
+- [Managed Identities & Authentication](#managed-identities--authentication)
+- [APIs on Kubernetes](#apis-on-kubernetes)
+- [Two Ingress Strategies (Cost Comparison)](#two-ingress-strategies-cost-comparison)
+- [Network Layout](#network-layout)
+- [Resource Inventory](#resource-inventory)
+- [Prerequisites](#prerequisites)
+- [Deployment](#deployment)
+- [Testing](#testing)
+- [Tear Down](#tear-down)
+- [Project Structure](#project-structure)
+
+---
 
 ## Architecture
 
@@ -53,130 +74,365 @@ Single Sign-On across multiple frontend apps sharing one hostname, with backend 
               └───────────────────┘  └───────────────────┘
 ```
 
-### SSO Flow
+### Traffic Flow (end-to-end)
 
-All frontends share the same hostname (via App Gateway). MSAL.js stores tokens in `localStorage`, which is scoped by origin. User signs in on the main portal → navigates to `/app1/`, `/app2/`, `/app3/` → MSAL detects existing tokens → no re-authentication needed.
+```
+Browser → App Gateway (WAF, TLS termination)
+     ├─ / , /app1/, /app2/, /app3/  → Private Endpoint → Storage Account (static HTML)
+     └─ /api/*                      → APIM (internal VNet mode)
+           ├─ /api/agc/*            → AGC Frontend → AKS Cluster 1 (Gateway API + HTTPRoute)
+           └─ /api/traefik/*        → Internal LB → Traefik → AKS Cluster 2 (K8s Ingress)
+```
 
-### Two Ingress Strategies (Cost Comparison)
+**Internal pod-to-pod**: APIs within the same cluster communicate via ClusterIP services (no external routing needed).
+
+---
+
+## SSO — How It Works
+
+All 4 frontends (main portal + 3 sub-apps) are served from the **same hostname** via App Gateway path-based routing:
+
+```
+https://<public-ip>.sslip.io/       → Main Portal
+https://<public-ip>.sslip.io/app1/  → Orders App
+https://<public-ip>.sslip.io/app2/  → Users App
+https://<public-ip>.sslip.io/app3/  → Products App
+```
+
+**Why SSO works without additional sign-in:**
+
+1. All apps share the same **origin** (`https://<ip>.sslip.io`).
+2. MSAL.js stores tokens in `localStorage`, which is scoped by origin.
+3. User signs in on the Main Portal → MSAL caches tokens in `localStorage`.
+4. User navigates to `/app1/` → MSAL detects existing cached tokens → **no re-authentication needed**.
+5. Sub-apps show "SSO Active" immediately and can call APIs with the cached access token.
+
+### MSAL.js Configuration
+
+Each frontend uses identical MSAL config (only `redirectUri` differs):
+
+```javascript
+const msalConfig = {
+    auth: {
+        clientId: "<entra-app-client-id>",
+        authority: "https://login.microsoftonline.com/<tenant-id>",
+        redirectUri: "https://<hostname>/<app-path>/"
+    },
+    cache: {
+        cacheLocation: "localStorage",    // Critical for SSO across paths
+        storeAuthStateInCookie: true       // Fallback for IE11/Edge
+    }
+};
+```
+
+### Auth Flow
+
+```
+1. User clicks "Sign In" on Main Portal
+2. MSAL.js → loginRedirect() → Entra ID authorization endpoint
+3. User authenticates (MFA if configured)
+4. Entra ID redirects back to / with auth code
+5. MSAL.js exchanges code for tokens (PKCE, no client secret needed)
+6. ID token + access token cached in localStorage
+7. User navigates to /app1/ → MSAL.js finds cached tokens → SSO!
+```
+
+---
+
+## Entra ID App Registration
+
+Created automatically via Terraform (`terraform/entra.tf`):
+
+| Setting | Value |
+|---------|-------|
+| **Display Name** | `sso-demo-auth-api-spa` |
+| **Platform** | Single-Page Application (SPA) |
+| **Auth Flow** | Authorization Code + PKCE (no client secret) |
+| **Redirect URIs** | `/`, `/app1/`, `/app2/`, `/app3/` |
+| **Token Version** | v2.0 |
+| **Group Claims** | SecurityGroup (emitted as roles) |
+| **API Permissions** | `User.Read`, `openid`, `profile` |
+| **Exposed API** | `api.access` scope for backend tokens |
+
+### Manual Steps (post `terraform apply`)
+
+To get group claims in tokens, an admin must:
+
+1. Go to **Entra ID → App registrations → sso-demo-auth-api-spa**
+2. **Token configuration** → Add groups claim:
+   - Select "Security groups"
+   - Check "Emit groups as role claims" for ID token and Access token
+3. **Enterprise Applications → sso-demo-auth-api-spa → Properties**:
+   - Set "Assignment required?" to **No** (or assign users/groups explicitly)
+
+---
+
+## JWT Token & Group Claims
+
+Each frontend has a **"See My JWT Token"** button that shows:
+
+- **Decoded tab**: The full `idTokenClaims` JSON, including:
+  - `name`, `preferred_username`, `email`
+  - `groups`: Array of Entra security group **Object IDs** the user belongs to
+  - `aud`, `iss`, `iat`, `exp` (standard JWT claims)
+- **Raw tab**: The base64-encoded JWT string
+
+### Enabling Group Claims
+
+The Terraform `entra.tf` configures:
+
+```hcl
+group_membership_claims = ["SecurityGroup"]
+
+optional_claims {
+  id_token {
+    name                  = "groups"
+    additional_properties = ["emit_as_roles"]
+  }
+  access_token {
+    name                  = "groups"
+    additional_properties = ["emit_as_roles"]
+  }
+}
+```
+
+This means:
+- The **ID token** will contain `groups: ["<group-object-id-1>", "<group-object-id-2>"]`
+- The **Access token** will contain the same, usable by backend APIs
+- Groups are also emitted as `roles` for easy RBAC in backend APIs
+- If a user belongs to >200 groups, Entra returns a `_claim_names`/`_claim_sources` overage indicator instead — the app must call Microsoft Graph to get full list
+
+---
+
+## Managed Identities & Authentication
+
+This project uses **zero passwords/secrets** for Azure service-to-service auth via Managed Identities:
+
+| Component | Identity Type | Purpose |
+|-----------|--------------|---------|
+| **AKS Cluster 1** | User-Assigned Managed Identity | Network Contributor on its subnet, ACR Pull |
+| **AKS Cluster 2** | User-Assigned Managed Identity | Network Contributor on its subnet, ACR Pull |
+| **ALB Controller** | User-Assigned + Workload Identity | Manages AGC configuration (federated from K8s SA) |
+| **AKS Kubelet** | System-Assigned | Pulls images from ACR |
+| **Storage Accounts** | Entra ID (azurerm provider) | No shared access keys — data plane uses `storage_use_azuread = true` |
+| **Frontend SPA** | MSAL.js (PKCE) | No client secret — auth code + PKCE flow |
+
+### Workload Identity (ALB Controller)
+
+The ALB Controller in AKS Cluster 1 uses **Workload Identity Federation** — it exchanges a K8s service account token for an Azure AD token without any stored credential:
+
+```
+K8s Service Account (azure-alb-system:alb-controller-sa)
+    ↓ Federated Identity Credential
+Azure User-Assigned Managed Identity (alb-controller-id)
+    ↓ RBAC
+AppGw for Containers Configuration Manager (on AGC resource)
+Network Contributor (on AGC subnet)
+Reader (on Resource Group)
+```
+
+### Storage Data Plane Auth
+
+Storage accounts have `shared_access_key_enabled = false` — enforced by tenant policy. The Terraform azurerm provider uses the deploying user's Entra identity (via `storage_use_azuread = true` in the provider config) with a `Storage Blob Data Contributor` role assignment.
+
+---
+
+## APIs on Kubernetes
+
+### Single Container Image, Three Services
+
+All APIs use the same Docker image (`apis/app.py`), differentiated by environment variables:
+
+```yaml
+env:
+  - name: SERVICE_NAME    # orders | users | products
+  - name: CLUSTER_NAME    # cluster1-agc | cluster2-traefik
+  - name: INGRESS_TYPE    # agc | traefik
+```
+
+The Flask app returns mock data based on `SERVICE_NAME`:
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /` or `GET /{service_name}` | Returns mock data for the service |
+| `GET /health` or `GET /{service_name}/health` | Health check |
+| `GET /{service_name}/<subpath>` | Catch-all for path-based routing |
+
+### Deployment Topology
+
+Each AKS cluster runs 3 deployments (1 replica each):
+
+```
+AKS Cluster 1 (Azure CNI, VNet-routable pods):
+  ├── api-orders    (ClusterIP:8080) ──┐
+  ├── api-users     (ClusterIP:8080) ──┼── AGC HTTPRoute → /orders, /users, /products
+  └── api-products  (ClusterIP:8080) ──┘
+
+AKS Cluster 2 (CNI Overlay):
+  ├── api-orders    (ClusterIP:8080) ──┐
+  ├── api-users     (ClusterIP:8080) ──┼── Traefik Ingress → /orders, /users, /products
+  └── api-products  (ClusterIP:8080) ──┘
+```
+
+---
+
+## Two Ingress Strategies (Cost Comparison)
 
 | Aspect | Cluster 1 — AGC | Cluster 2 — Traefik |
 |--------|-----------------|---------------------|
-| Ingress controller | App Gateway for Containers | Traefik (Helm) |
-| Load balancer | Managed by Azure (AGC) | Internal Azure LB |
-| K8s API | Gateway API (HTTPRoute) | Kubernetes Ingress |
-| Network plugin | Azure CNI (VNet-routable pods) | Azure CNI Overlay |
-| Azure resource | `Microsoft.ServiceNetworking` | Standard LB + Helm |
+| **Ingress Controller** | App Gateway for Containers (ALB Controller) | Traefik (Helm chart) |
+| **Load Balancer** | Managed by Azure (AGC) | Internal Azure LB |
+| **K8s API** | Gateway API (`Gateway` + `HTTPRoute`) | Kubernetes Ingress |
+| **Network Plugin** | Azure CNI (pods get VNet IPs) | Azure CNI Overlay (pods get overlay IPs) |
+| **Extra Azure Cost** | AGC resource billing | Standard LB only |
+| **Setup Complexity** | Higher (Workload Identity + RBAC + Gateway API CRDs) | Lower (Helm install + Ingress resource) |
+| **TLS Termination** | At AGC level | At Traefik level |
+| **Why Choose** | Azure-native, auto-scaling, no self-managed controller | Full control, open-source, portable across clouds |
 
-### Network Layout
+---
+
+## Network Layout
 
 | Subnet | CIDR | Purpose |
 |--------|------|---------|
-| `appgw` | `10.0.0.0/24` | Application Gateway v2 |
-| `pe` | `10.0.1.0/24` | Private Endpoints (storage) |
-| `apim` | `10.0.2.0/24` | API Management |
+| `appgw` | `10.0.1.0/24` | Application Gateway v2 (WAF) |
+| `pe` | `10.0.2.0/24` | Private Endpoints (4× storage web) |
+| `apim` | `10.0.3.0/24` | API Management (internal VNet) |
 | `agc` | `10.0.4.0/24` | App Gateway for Containers |
-| `aks1` | `10.0.16.0/22` | AKS Cluster 1 (nodes + pods) |
-| `aks2` | `10.0.20.0/22` | AKS Cluster 2 (nodes) |
+| `aks1` | `10.0.16.0/22` | AKS Cluster 1 (nodes + VNet-routable pods) |
+| `aks2` | `10.0.20.0/22` | AKS Cluster 2 (nodes only, pods use overlay) |
 
-### Resource Inventory
+**Private DNS Zones:**
+- `privatelink.web.core.windows.net` — resolves storage private endpoints
+- `azure-api.net` — resolves APIM internal FQDN
+
+---
+
+## Resource Inventory
 
 | Resource | Name/Count | SKU/Tier |
 |----------|-----------|----------|
 | Resource Group | `sso-demo-auth-api-rg` | — |
 | VNet | 1 (6 subnets) | — |
 | App Gateway v2 | 1 (WAF_v2) | Standard_v2 |
-| Storage Accounts | 4 (static website) | Standard_LRS |
-| Private Endpoints | 4 (storage web) | — |
-| APIM | 1 (internal VNet) | Developer_1 |
+| WAF Policy | 1 (OWASP 3.2, Prevention mode) | — |
+| Storage Accounts | 4 (static website, PE, no public) | Standard_LRS |
+| Private Endpoints | 4 (storage web sub-resource) | — |
+| APIM | 1 (internal VNet) | Developer × 1 unit |
 | ACR | 1 | Basic |
 | AKS | 2 clusters | Standard_D2s_v3 × 1 node each |
 | AGC | 1 traffic controller | — |
-| Entra App Registration | 1 (SPA) | — |
+| Entra App Registration | 1 (SPA, group claims) | — |
 | Private DNS Zones | 2 (storage + APIM) | — |
+| Managed Identities | 4 (AKS1, AKS2, ALB Controller, deployer role) | — |
 
-## Live URLs
-
-| Endpoint | URL |
-|----------|-----|
-| Main Portal | `https://<app-gw-ip>.sslip.io/` |
-| Orders App | `https://<app-gw-ip>.sslip.io/app1/` |
-| Users App | `https://<app-gw-ip>.sslip.io/app2/` |
-| Products App | `https://<app-gw-ip>.sslip.io/app3/` |
-| APIs (AGC) | `https://<app-gw-ip>.sslip.io/api/agc/{orders,users,products}/health` |
-| APIs (Traefik) | `https://<app-gw-ip>.sslip.io/api/traefik/{orders,users,products}/health` |
+---
 
 ## Prerequisites
 
-- Azure CLI (`az login --tenant <tenant-id>`)
-- Terraform >= 1.5
-- kubectl
-- Subscription registered for `Microsoft.ServiceNetworking`
+- **Azure CLI** (`az`) — logged in to your tenant
+- **Terraform** ≥ 1.5
+- **PowerShell** 7+ (`pwsh`) — for PFX certificate generation
+- **kubectl** — for debugging (optional)
+- **Permissions**: Contributor + User Access Administrator on the subscription, Application Administrator in Entra ID
 
-## Deploy
+## Deployment
+
+### One-Command Deploy
 
 ```powershell
-# Option 1: Automated script
 .\scripts\deploy.ps1
+```
 
-# Option 2: Manual
+### Manual Deploy
+
+```powershell
 cd terraform
 terraform init
 terraform plan -out=tfplan
 terraform apply tfplan
 
-# Build and push the API image
-az acr build --registry <acr-name> --image demo-api:latest ../apis/
-
-# Apply AGC Gateway API resources (after AKS is ready)
-az aks get-credentials -g sso-demo-auth-api-rg -n <aks1-name> --admin
-kubectl apply -f terraform/.generated/agc-gateway.yaml
+# Build and push the API container image
+az acr build --registry $(terraform output -raw acr_login_server) --image demo-api:latest ../apis/
 ```
 
-## Destroy
+> **Note**: APIM Developer tier takes ~30-45 minutes to provision. The self-signed TLS cert will trigger a browser warning — expected for a demo.
+
+## Testing
+
+### Frontend URLs
+
+| App | URL |
+|-----|-----|
+| Main Portal | `https://<public-ip>.sslip.io/` |
+| Orders App | `https://<public-ip>.sslip.io/app1/` |
+| Users App | `https://<public-ip>.sslip.io/app2/` |
+| Products App | `https://<public-ip>.sslip.io/app3/` |
+
+### API Health Checks
+
+```bash
+# AGC path (Cluster 1)
+curl -k https://<public-ip>.sslip.io/api/agc/orders/health
+curl -k https://<public-ip>.sslip.io/api/agc/users/health
+curl -k https://<public-ip>.sslip.io/api/agc/products/health
+
+# Traefik path (Cluster 2)
+curl -k https://<public-ip>.sslip.io/api/traefik/orders/health
+curl -k https://<public-ip>.sslip.io/api/traefik/users/health
+curl -k https://<public-ip>.sslip.io/api/traefik/products/health
+```
+
+### SSO Test Flow
+
+1. Open the Main Portal and click **Sign In**
+2. Authenticate with your Entra ID account
+3. Click **See My JWT Token** — inspect the decoded claims including `groups`
+4. Navigate to `/app1/` — you should see **"SSO Active"** with no sign-in prompt
+5. Click **See My JWT Token** on the sub-app — same token, same groups
+6. Call APIs from both clusters using the frontend buttons
+
+## Tear Down
 
 ```powershell
-.\scripts\deploy.ps1 -DestroyAll
-# or
-cd terraform && terraform destroy
+cd terraform
+terraform destroy -auto-approve
 ```
+
+---
 
 ## Project Structure
 
 ```
-terraform/                       # Infrastructure as Code
-  main.tf                        # Providers (azurerm, azuread, kubernetes, helm, tls)
-  variables.tf                   # Input variables
-  terraform.tfvars               # Variable overrides
-  network.tf                     # VNet, 6 subnets, NSGs
-  dns.tf                         # Private DNS zones (storage, APIM)
-  storage.tf                     # 4 storage accounts + PE + role assignments
-  appgateway.tf                  # App Gateway v2 (WAF), path routing, URL rewrite
-  apim.tf                        # APIM Developer (internal VNet), catch-all APIs
-  acr.tf                         # Azure Container Registry
-  aks.tf                         # 2 AKS clusters + ACR pull roles
-  agc.tf                         # App Gateway for Containers + ALB identity
-  entra.tf                       # Entra ID app registration (SPA)
-  k8s-cluster1.tf                # Cluster 1: ALB controller, deployments, Gateway API
-  k8s-cluster2.tf                # Cluster 2: Traefik Helm, deployments, Ingress
-  frontend.tf                    # Upload templated HTML to storage blobs
-  outputs.tf                     # Key outputs (URLs, IPs, names)
-  templates/
-    main-portal.html.tftpl       # Main SSO portal page
-    sub-app.html.tftpl           # Sub-app template (Orders/Users/Products)
-    agc-gateway.yaml.tftpl       # Gateway API resources for AGC
-apis/
-  app.py                         # Flask API (single image, SERVICE_NAME env var)
-  Dockerfile                     # Container build
-  requirements.txt               # Python dependencies
-scripts/
-  deploy.ps1                     # One-command deploy/destroy
+├── README.md
+├── .gitignore
+├── apis/
+│   ├── app.py              # Flask API (single image, 3 services via env var)
+│   ├── Dockerfile           # Python 3.11-slim container
+│   └── requirements.txt     # Flask + gunicorn
+├── scripts/
+│   └── deploy.ps1           # One-command deployment script
+└── terraform/
+    ├── main.tf              # Providers (azurerm, azuread, kubernetes×2, helm×2, tls)
+    ├── variables.tf         # Input variables (prefix, region, CIDRs, AKS size)
+    ├── terraform.tfvars     # Variable overrides
+    ├── network.tf           # VNet + 6 subnets + NSGs
+    ├── dns.tf               # Private DNS zones (storage + APIM)
+    ├── storage.tf           # 4 storage accounts + static website + PEs
+    ├── acr.tf               # Container registry
+    ├── entra.tf             # Entra ID app registration (SPA, group claims)
+    ├── appgateway.tf        # App Gateway v2 (WAF), path routing, self-signed TLS
+    ├── apim.tf              # APIM Developer (internal VNet), CORS, API routing
+    ├── aks.tf               # 2 AKS clusters (Azure CNI / CNI Overlay)
+    ├── agc.tf               # App Gateway for Containers + ALB identity + RBAC
+    ├── k8s-cluster1.tf      # Cluster 1: ALB controller Helm, deployments, Gateway API
+    ├── k8s-cluster2.tf      # Cluster 2: Traefik Helm, deployments, K8s Ingress
+    ├── frontend.tf          # Upload templated HTML to storage accounts
+    ├── outputs.tf           # Key outputs (URLs, IPs, names)
+    └── templates/
+        ├── main-portal.html.tftpl  # Main portal HTML (MSAL.js + JWT viewer)
+        ├── sub-app.html.tftpl      # Sub-app HTML template (SSO detection)
+        └── agc-gateway.yaml.tftpl  # Gateway API resources for AGC
 ```
 
-## Notes
 
-- APIM Developer tier takes ~30–45 min to provision
-- Self-signed TLS certificate — accept browser warning for demo
-- All storage accounts use Entra-only auth (no shared keys)
-- Storage accounts are private (accessible only via Private Endpoints)
-- AKS Cluster 1 uses Azure CNI (VNet-routable pods) required by AGC
-- AKS Cluster 2 uses CNI Overlay (pods on virtual network, routed via Traefik ClusterIP)
