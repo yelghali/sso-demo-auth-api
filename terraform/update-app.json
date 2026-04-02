@@ -1,0 +1,39 @@
+{
+  "groupMembershipClaims": "SecurityGroup",
+  "appRoles": [
+    {
+      "id": "00000000-0000-0000-0000-000000000010",
+      "allowedMemberTypes": ["User"],
+      "displayName": "Admin",
+      "description": "Full access to all demo resources",
+      "value": "Admin",
+      "isEnabled": true
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000011",
+      "allowedMemberTypes": ["User"],
+      "displayName": "Reader",
+      "description": "Read-only access to demo resources",
+      "value": "Reader",
+      "isEnabled": true
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000012",
+      "allowedMemberTypes": ["User"],
+      "displayName": "User",
+      "description": "Standard user access",
+      "value": "User",
+      "isEnabled": true
+    }
+  ],
+  "optionalClaims": {
+    "idToken": [
+      {"name": "groups", "essential": false, "additionalProperties": ["sam_account_name", "cloud_displayname"]},
+      {"name": "email", "essential": true, "additionalProperties": []}
+    ],
+    "accessToken": [
+      {"name": "groups", "essential": false, "additionalProperties": ["sam_account_name", "cloud_displayname"]},
+      {"name": "email", "essential": true, "additionalProperties": []}
+    ]
+  }
+}

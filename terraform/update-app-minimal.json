@@ -1,0 +1,13 @@
+{
+  "groupMembershipClaims": "SecurityGroup",
+  "optionalClaims": {
+    "idToken": [
+      {"name": "groups", "essential": false, "additionalProperties": []},
+      {"name": "email", "essential": true, "additionalProperties": []}
+    ],
+    "accessToken": [
+      {"name": "groups", "essential": false, "additionalProperties": []},
+      {"name": "email", "essential": true, "additionalProperties": []}
+    ]
+  }
+}

@@ -156,6 +156,58 @@ resource "azurerm_network_security_group" "appgw" {
   resource_group_name = azurerm_resource_group.main.name
   location            = azurerm_resource_group.main.location
 
+  # Inbound: Allow HTTP/HTTPS from Internet
+  security_rule {
+    name                       = "AllowHTTPS"
+    priority                   = 110
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_ranges    = ["80", "443"]
+    source_address_prefix      = "Internet"
+    destination_address_prefix = "*"
+  }
+
+  # Inbound: Azure Load Balancer health probes
+  security_rule {
+    name                       = "AllowAzureLB"
+    priority                   = 120
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "*"
+    source_port_range          = "*"
+    destination_port_range     = "*"
+    source_address_prefix      = "AzureLoadBalancer"
+    destination_address_prefix = "*"
+  }
+
+  # Inbound: Gateway Manager (required for App Gateway v2)
+  security_rule {
+    name                       = "AllowGatewayManager"
+    priority                   = 130
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = "65200-65535"
+    source_address_prefix      = "GatewayManager"
+    destination_address_prefix = "*"
+  }
+}
+
+resource "azurerm_subnet_network_security_group_association" "appgw" {
+  subnet_id                 = azurerm_subnet.appgw.id
+  network_security_group_id = azurerm_network_security_group.appgw.id
+}
+
+# ─── NSG for App Gateway subnet ────────────────────────────────
+
+resource "azurerm_network_security_group" "appgw" {
+  name                = "${var.prefix}-appgw-nsg"
+  resource_group_name = azurerm_resource_group.main.name
+  location            = azurerm_resource_group.main.location
+
   # Required: Allow GatewayManager
   security_rule {
     name                       = "AllowGatewayManager"

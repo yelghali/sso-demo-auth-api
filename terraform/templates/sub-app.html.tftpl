@@ -45,6 +45,7 @@
             <button class="btn" id="loginBtn" onclick="login()" style="display:none;margin-top:12px">Sign In</button>
             <button class="btn btn-token" id="tokenBtn" onclick="showToken()" style="display:none;margin-top:12px">&#128273; See My JWT Token</button>
             <div id="groups-container" style="display:none" class="groups-list"></div>
+            <div id="roles-container" style="display:none" class="groups-list"></div>
         </div>
 
         <!-- JWT Token Viewer -->
@@ -93,11 +94,27 @@
                 document.getElementById("status").textContent = "SSO Active - Signed in: " + account.name + " (" + account.username + ")";
                 document.getElementById("tokenBtn").style.display = "inline-block";
                 const claims = account.idTokenClaims;
+                // Show groups
                 if (claims && claims.groups && claims.groups.length) {
                     const container = document.getElementById("groups-container");
                     container.style.display = "block";
-                    container.innerHTML = "<strong>Groups:</strong> " +
+                    container.innerHTML = "<strong>&#128101; Groups:</strong> " +
                         claims.groups.map(g => "<span>" + g + "</span>").join("");
+                } else {
+                    const container = document.getElementById("groups-container");
+                    container.style.display = "block";
+                    container.innerHTML = "<strong>&#128101; Groups:</strong> <em>No groups in token</em>";
+                }
+                // Show roles
+                if (claims && claims.roles && claims.roles.length) {
+                    const container = document.getElementById("roles-container");
+                    container.style.display = "block";
+                    container.innerHTML = "<strong>&#127919; Roles:</strong> " +
+                        claims.roles.map(r => "<span style='background:#fef3c7;color:#92400e'>" + r + "</span>").join("");
+                } else {
+                    const container = document.getElementById("roles-container");
+                    container.style.display = "block";
+                    container.innerHTML = "<strong>&#127919; Roles:</strong> <em>No app roles assigned</em>";
                 }
             } else {
                 document.getElementById("status").className = "status signed-out";

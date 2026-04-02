@@ -3,8 +3,8 @@
 resource "azuread_application" "main" {
   display_name = "${var.prefix}-spa"
 
-  # Emit Entra security groups in JWT tokens
-  group_membership_claims = ["SecurityGroup"]
+  # Emit ALL group types (Security + Microsoft 365 + Directory roles)
+  group_membership_claims = ["All"]
 
   # SPA auth (MSAL.js) — redirect URIs use the App Gateway hostname
   single_page_application {
@@ -16,15 +16,49 @@ resource "azuread_application" "main" {
     ]
   }
 
-  # Include groups claim in ID token
+  # ─── App Roles (appear in the `roles` claim) ────────────────
+  app_role {
+    allowed_member_types = ["User"]
+    description          = "Full access to all demo resources"
+    display_name         = "Admin"
+    id                   = "00000000-0000-0000-0000-000000000010"
+    enabled              = true
+    value                = "Admin"
+  }
+
+  app_role {
+    allowed_member_types = ["User"]
+    description          = "Read-only access to demo resources"
+    display_name         = "Reader"
+    id                   = "00000000-0000-0000-0000-000000000011"
+    enabled              = true
+    value                = "Reader"
+  }
+
+  app_role {
+    allowed_member_types = ["User"]
+    description          = "Standard user access"
+    display_name         = "User"
+    id                   = "00000000-0000-0000-0000-000000000012"
+    enabled              = true
+    value                = "User"
+  }
+
+  # ─── Optional Claims (groups in `groups`, NOT as roles) ─────
   optional_claims {
     id_token {
-      name                  = "groups"
-      additional_properties = ["emit_as_roles"]
+      name = "groups"
+    }
+    id_token {
+      name      = "email"
+      essential = true
     }
     access_token {
-      name                  = "groups"
-      additional_properties = ["emit_as_roles"]
+      name = "groups"
+    }
+    access_token {
+      name      = "email"
+      essential = true
     }
   }
 
@@ -70,5 +104,15 @@ resource "azuread_application" "main" {
   }
 }
 
-# App password not needed for SPA (uses auth code + PKCE)
-# Service principal created automatically by Entra when app is registered
+# ─── Service Principal (Enterprise App) ──────────────────────
+resource "azuread_service_principal" "main" {
+  client_id                    = azuread_application.main.client_id
+  app_role_assignment_required = false # Allow all tenant users to sign in
+}
+
+# ─── Assign "Admin" role to the deploying user ───────────────
+resource "azuread_app_role_assignment" "deployer_admin" {
+  app_role_id         = "00000000-0000-0000-0000-000000000010" # Admin
+  principal_object_id = data.azurerm_client_config.current.object_id
+  resource_object_id  = azuread_service_principal.main.object_id
+}

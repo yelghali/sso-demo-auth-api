@@ -152,20 +152,82 @@ Created automatically via Terraform (`terraform/entra.tf`):
 | **Auth Flow** | Authorization Code + PKCE (no client secret) |
 | **Redirect URIs** | `/`, `/app1/`, `/app2/`, `/app3/` |
 | **Token Version** | v2.0 |
-| **Group Claims** | SecurityGroup (emitted as roles) |
 | **API Permissions** | `User.Read`, `openid`, `profile` |
 | **Exposed API** | `api.access` scope for backend tokens |
 
-### Manual Steps (post `terraform apply`)
+### Required Manual Steps (post `terraform apply`)
 
-To get group claims in tokens, an admin must:
+> **Why manual?** Some tenants restrict programmatic (Graph API / CLI) updates to app registrations. Terraform creates the app but cannot modify certain manifest properties like `groupMembershipClaims` and `optionalClaims`. These must be set via the Azure Portal.
 
-1. Go to **Entra ID → App registrations → sso-demo-auth-api-spa**
-2. **Token configuration** → Add groups claim:
-   - Select "Security groups"
-   - Check "Emit groups as role claims" for ID token and Access token
-3. **Enterprise Applications → sso-demo-auth-api-spa → Properties**:
-   - Set "Assignment required?" to **No** (or assign users/groups explicitly)
+#### Step 1 — Enable Group Claims in Token Configuration
+
+1. Go to **[Azure Portal](https://portal.azure.com)** → **Entra ID** → **App registrations** → **`sso-demo-auth-api-spa`**
+2. Click **Token configuration** in the left menu
+3. Click **+ Add groups claim**
+4. Select **Security groups**
+5. For both **ID** and **Access** token types, check:
+   - ✅ Group ID
+6. Click **Add**
+
+#### Step 2 — Add Optional Claims (email)
+
+1. Still in **Token configuration**, click **+ Add optional claim**
+2. Select **Token type: ID**
+3. Check **email** → Click **Add**
+4. Repeat for **Token type: Access** → check **email** → **Add**
+
+#### Step 3 — Define App Roles
+
+1. Go to **App roles** in the left menu
+2. Click **+ Create app role** three times:
+
+| Display Name | Value | Allowed members | Description |
+|-------------|-------|-----------------|-------------|
+| Admin | `Admin` | Users/Groups | Full access to all demo resources |
+| Reader | `Reader` | Users/Groups | Read-only access to demo resources |
+| User | `User` | Users/Groups | Standard user access |
+
+#### Step 4 — Assign Roles to Users
+
+1. Go to **Enterprise Applications** → **`sso-demo-auth-api-spa`**
+2. Click **Users and groups** → **+ Add user/group**
+3. Select yourself and assign the **Admin** role
+4. Click **Assign**
+
+#### Step 5 — (Alternative) Edit Manifest Directly
+
+Instead of steps 1-3, you can edit the manifest JSON directly:
+
+1. Go to **App registrations** → **`sso-demo-auth-api-spa`** → **Manifest**
+2. Find and replace/add these properties (see `terraform/update-app.json` for the full JSON):
+
+```json
+"groupMembershipClaims": "SecurityGroup",
+"optionalClaims": {
+    "idToken": [
+        {"name": "groups", "essential": false, "additionalProperties": ["sam_account_name", "cloud_displayname"]},
+        {"name": "email", "essential": true, "additionalProperties": []}
+    ],
+    "accessToken": [
+        {"name": "groups", "essential": false, "additionalProperties": ["sam_account_name", "cloud_displayname"]},
+        {"name": "email", "essential": true, "additionalProperties": []}
+    ]
+},
+"appRoles": [
+    {"id": "00000000-0000-0000-0000-000000000010", "allowedMemberTypes": ["User"], "displayName": "Admin", "value": "Admin", "isEnabled": true, "description": "Full access"},
+    {"id": "00000000-0000-0000-0000-000000000011", "allowedMemberTypes": ["User"], "displayName": "Reader", "value": "Reader", "isEnabled": true, "description": "Read-only"},
+    {"id": "00000000-0000-0000-0000-000000000012", "allowedMemberTypes": ["User"], "displayName": "User", "value": "User", "isEnabled": true, "description": "Standard access"}
+]
+```
+
+3. Click **Save**
+
+#### Step 6 — Verify
+
+1. Sign out and sign back in on the portal
+2. Click **See My JWT Token** — you should now see:
+   - `groups`: array of security group Object IDs
+   - `roles`: array of assigned app role values (e.g. `["Admin"]`)
 
 ---
 

@@ -56,6 +56,7 @@
                 <button class="btn btn-danger" id="logoutBtn" onclick="logout()" style="display:none">Sign Out</button>
             </div>
             <div id="groups-container" style="display:none" class="groups-list"></div>
+            <div id="roles-container" style="display:none" class="groups-list"></div>
         </div>
 
         <!-- App Navigation -->
@@ -135,13 +136,28 @@
             document.getElementById("loginBtn").style.display = "none";
             document.getElementById("tokenBtn").style.display = "inline-block";
             document.getElementById("logoutBtn").style.display = "inline-block";
-            // Show groups from idTokenClaims
             const claims = account.idTokenClaims;
+            // Show groups
             if (claims && claims.groups && claims.groups.length) {
                 const container = document.getElementById("groups-container");
                 container.style.display = "block";
-                container.innerHTML = "<strong>Groups:</strong> " +
+                container.innerHTML = "<strong>&#128101; Groups:</strong> " +
                     claims.groups.map(g => "<span>" + g + "</span>").join("");
+            } else {
+                const container = document.getElementById("groups-container");
+                container.style.display = "block";
+                container.innerHTML = "<strong>&#128101; Groups:</strong> <em>No groups found in token. Assign user to an Entra security group.</em>";
+            }
+            // Show roles
+            if (claims && claims.roles && claims.roles.length) {
+                const container = document.getElementById("roles-container");
+                container.style.display = "block";
+                container.innerHTML = "<strong>&#127919; Roles:</strong> " +
+                    claims.roles.map(r => "<span style='background:#fef3c7;color:#92400e'>" + r + "</span>").join("");
+            } else {
+                const container = document.getElementById("roles-container");
+                container.style.display = "block";
+                container.innerHTML = "<strong>&#127919; Roles:</strong> <em>No app roles assigned. Assign via Enterprise App &gt; Users and groups.</em>";
             }
         }
 
