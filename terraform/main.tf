@@ -56,6 +56,13 @@ provider "azurerm" {
     }
   }
   storage_use_azuread = true
+
+  default_tags {
+    tags = {
+      CostControl     = "Ignore"
+      SecurityControl = "Ignore"
+    }
+  }
 }
 
 provider "azuread" {}
