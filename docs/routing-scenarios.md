@@ -1,3 +1,292 @@
+# Routing & Traffic Architecture
+
+How traffic flows from the internet to frontends and APIs in this project.
+
+---
+
+## Routing Summary
+
+| Path Pattern | Traffic Type | Route |
+|---|---|---|
+| `/`, `/app1/*`, `/app2/*`, `/app3/*` | Static frontends (Storage) | App Gateway → Private Endpoint → Storage Account |
+| `/aks-app/*` | Frontend on AKS (static files) | App Gateway → AGC → NGINX Pod |
+| `/api/agc/*` | New APIs (AKS) | App Gateway → APIM → AGC → API Pod |
+| `/api/nginx/*` | Legacy APIs (AKS, existing) | App Gateway → APIM → NGINX Ingress ILB → API Pod |
+
+**Key decision:** AKS-hosted frontends bypass APIM and route directly through AGC. APIM is an API management layer (rate limiting, JWT validation, logging) — static HTML/CSS/JS doesn't benefit from it, and it adds latency.
+
+---
+
+## Network Layout
+
+All resources sit within a single VNet (`10.0.0.0/16`):
+
+| Subnet | CIDR | Resources |
+|---|---|---|
+| `snet-appgw` | `10.0.1.0/24` | Application Gateway v2 (WAF) |
+| `snet-pe` | `10.0.2.0/24` | Private Endpoints (storage) |
+| `snet-apim` | `10.0.3.0/24` | APIM (internal VNet mode) |
+| `snet-agc` | `10.0.4.0/24` | App Gateway for Containers |
+| `snet-aks1` | `10.0.16.0/22` | AKS Cluster (nodes + pods, Azure CNI) |
+
+---
+
+## Traffic Flows
+
+### 1. Static Frontends (Storage)
+
+```
+Browser
+  │ HTTPS
+  ▼
+App Gateway (WAF_v2, TLS termination)
+  │ Path: / , /app1/*, /app2/*, /app3/*
+  │ Backend pool: Private Endpoint IPs
+  ▼
+Storage Account ($web container)
+  │ Static HTML/CSS/JS (MSAL.js)
+  ▼
+Browser renders SPA
+```
+
+Storage accounts have `default_action = "Deny"` — only reachable via Private Endpoints through the VNet.
+
+### 2. Frontend on AKS (via AGC — bypasses APIM)
+
+```
+Browser
+  │ HTTPS
+  ▼
+App Gateway (WAF_v2)
+  │ Path: /aks-app/*
+  │ Backend pool: AGC frontend IP
+  ▼
+AGC (App Gateway for Containers)
+  │ HTTPRoute: /aks-app → frontend service
+  ▼
+NGINX Pod (serves static HTML from ConfigMap)
+  │ /usr/share/nginx/html/index.html
+  ▼
+Browser renders page
+  │ API calls → /api/* (separate path, through APIM)
+```
+
+**Why bypass APIM for this?** The frontend is static content — no rate limiting, JWT validation, or request transformation needed. APIM would add latency for zero benefit. The SPA's API calls still go through `/api/*` → APIM.
+
+### 3. New APIs (via APIM → AGC)
+
+```
+Browser / SPA
+  │ HTTPS
+  ▼
+App Gateway (WAF_v2)
+  │ Path: /api/agc/*
+  │ Backend pool: APIM internal IP
+  ▼
+APIM (Internal VNet)
+  │ Policies: CORS, rate-limit, JWT validation, logging
+  │ Backend: AGC frontend FQDN
+  ▼
+AGC (App Gateway for Containers)
+  │ Gateway API HTTPRoute
+  │   /orders   → api-orders:8080
+  │   /users    → api-users:8080
+  │   /products → api-products:8080
+  ▼
+Flask API Pod (AKS)
+```
+
+### 4. Legacy APIs (via APIM → NGINX Ingress)
+
+```
+Browser / SPA
+  │ HTTPS
+  ▼
+App Gateway (WAF_v2)
+  │ Path: /api/nginx/*
+  │ Backend pool: APIM internal IP
+  ▼
+APIM (Internal VNet)
+  │ Backend: NGINX ILB IP (10.0.16.100)
+  ▼
+NGINX Ingress Controller (ILB)
+  │ Ingress rules (class: nginx)
+  │ Path rewrite: strip prefix
+  ▼
+Legacy API Pod (AKS)
+```
+
+---
+
+## AGC + NGINX Ingress Co-Existence
+
+Both run on the same AKS cluster without conflict:
+
+| Aspect | AGC | NGINX Ingress |
+|---|---|---|
+| Kubernetes API | Gateway API (`gateway.networking.k8s.io`) | Ingress API (`networking.k8s.io/v1`) |
+| Controller | ALB Controller (Azure-managed) | ingress-nginx (self-managed) |
+| Class | `azure-alb-external` (GatewayClass) | `nginx` (IngressClass) |
+| Load Balancer | AGC (Azure-managed) | Internal Azure LB (ILB) |
+
+Each controller only watches its own resource type — no interference.
+
+**Migration path:** New services use AGC (Gateway API). Legacy services stay on NGINX Ingress. Migrate gradually by creating HTTPRoutes and removing Ingress resources.
+
+---
+
+## App Gateway Path Routing
+
+```hcl
+# terraform/appgateway.tf
+url_path_map {
+  name                               = "path-map"
+  default_backend_address_pool_name  = "pool-main"
+  default_backend_http_settings_name = "settings-main"
+
+  # AKS frontend — direct to AGC, bypasses APIM
+  path_rule {
+    name                       = "aks-app-rule"
+    paths                      = ["/aks-app", "/aks-app/*"]
+    backend_address_pool_name  = "pool-agc"
+    backend_http_settings_name = "settings-agc"
+  }
+
+  # All APIs — through APIM for policy enforcement
+  path_rule {
+    name                       = "api-rule"
+    paths                      = ["/api", "/api/*"]
+    backend_address_pool_name  = "pool-apim"
+    backend_http_settings_name = "settings-apim"
+  }
+}
+```
+
+## AGC Gateway + HTTPRoutes
+
+```yaml
+# templates/agc-gateway.yaml.tftpl
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: agc-gateway
+  namespace: demo-apis
+  annotations:
+    alb.networking.azure.io/alb-id: <AGC_RESOURCE_ID>
+spec:
+  gatewayClassName: azure-alb-external
+  listeners:
+    - name: http
+      port: 80
+      protocol: HTTP
+      allowedRoutes:
+        namespaces:
+          from: All
+  addresses:
+    - type: alb.networking.azure.io/alb-frontend
+      value: <AGC_FRONTEND_NAME>
+---
+# New APIs (routed via APIM → AGC)
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: orders-route
+  namespace: demo-apis
+spec:
+  parentRefs:
+    - name: agc-gateway
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /orders
+      backendRefs:
+        - name: api-orders
+          port: 8080
+---
+# AKS frontend (routed via App Gateway → AGC, bypasses APIM)
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: frontend-route
+  namespace: frontend
+spec:
+  parentRefs:
+    - name: agc-gateway
+      namespace: demo-apis
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /aks-app
+      backendRefs:
+        - name: frontend
+          port: 80
+```
+
+## APIM Backends
+
+```hcl
+# terraform/apim.tf
+
+# New APIs → AGC
+resource "azurerm_api_management_backend" "agc" {
+  name     = "agc-backend"
+  protocol = "http"
+  url      = "http://${azurerm_application_load_balancer_frontend.main.fully_qualified_domain_name}"
+}
+
+# Legacy APIs → NGINX ILB
+resource "azurerm_api_management_backend" "nginx" {
+  name     = "nginx-backend"
+  protocol = "http"
+  url      = "http://${local.nginx_ilb_ip}"
+}
+```
+
+---
+
+## Terraform File Reference
+
+| File | Purpose |
+|---|---|
+| `main.tf` | Providers, locals, resource group |
+| `variables.tf` | Input variables |
+| `network.tf` | VNet, subnets, NSGs |
+| `aks.tf` | AKS cluster, identities, ACR pull role |
+| `agc.tf` | AGC resource, ALB controller identity + RBAC |
+| `apim.tf` | APIM (internal VNet), backends (AGC + NGINX), API definitions |
+| `appgateway.tf` | App Gateway v2 WAF, path routing, self-signed TLS |
+| `k8s-cluster1.tf` | ALB controller, API deployments, NGINX ingress, frontend |
+| `storage.tf` | Storage accounts, static websites, Private Endpoints |
+| `entra.tf` | Entra ID app registration (SPA, group claims) |
+| `dns.tf` | Private DNS zones (storage + APIM) |
+| `frontend.tf` | HTML uploads to storage |
+| `outputs.tf` | Key outputs (URLs, IPs) |
+
+---
+
+## Validation
+
+```powershell
+$ip = terraform output -raw app_gateway_public_ip
+$base = "https://$ip.sslip.io"
+
+# Storage-hosted frontends
+curl -k "$base/"
+curl -k "$base/app1/"
+
+# AKS-hosted frontend (App Gateway → AGC → Pod)
+curl -k "$base/aks-app"
+
+# APIs via AGC (App Gateway → APIM → AGC → Pod)
+curl -k "$base/api/agc/orders"
+curl -k "$base/api/agc/users"
+curl -k "$base/api/agc/products"
+
+# APIs via NGINX (App Gateway → APIM → NGINX ILB → Pod)
+curl -k "$base/api/nginx/legacy"
+```
 # Routing Scenarios — Step-by-Step Guide
 
 This guide covers three end-to-end routing scenarios deployed on Azure, all managed by Terraform. Each scenario shows how traffic flows from the public internet to backend services through different combinations of App Gateway, APIM, AGC, and ingress controllers.
