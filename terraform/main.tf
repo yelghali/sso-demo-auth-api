@@ -56,13 +56,6 @@ provider "azurerm" {
     }
   }
   storage_use_azuread = true
-
-  default_tags {
-    tags = {
-      CostControl     = "Ignore"
-      SecurityControl = "Ignore"
-    }
-  }
 }
 
 provider "azuread" {}
@@ -124,6 +117,9 @@ locals {
 
   # Static IP for Traefik internal LB (from AKS2 subnet)
   traefik_ilb_ip = cidrhost(var.subnet_cidrs["aks2"], 100)
+
+  # Static IP for NGINX internal LB (from AKS1 subnet)
+  nginx_ilb_ip = cidrhost(var.subnet_cidrs["aks1"], 100)
 
   storage_apps = {
     main = { name = "main", path = "", title = "Main Portal" }

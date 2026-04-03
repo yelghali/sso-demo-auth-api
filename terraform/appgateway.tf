@@ -163,6 +163,18 @@ resource "azurerm_application_gateway" "main" {
     fqdns = [replace(replace(azurerm_api_management.main.gateway_url, "https://", ""), "/", "")]
   }
 
+  # AGC frontend (AKS-hosted frontend — bypasses APIM)
+  backend_address_pool {
+    name  = "pool-agc"
+    fqdns = [azurerm_application_load_balancer_frontend.main.fully_qualified_domain_name]
+  }
+
+  # NGINX ILB (legacy APIs on Cluster 1 — through APIM or direct)
+  backend_address_pool {
+    name         = "pool-nginx"
+    ip_addresses = [local.nginx_ilb_ip]
+  }
+
   # ── Backend HTTP Settings ─────────────────────────────────────
 
   # Settings for Storage backends (HTTPS, host header override)
@@ -188,6 +200,27 @@ resource "azurerm_application_gateway" "main" {
     request_timeout       = 60
     host_name             = replace(replace(azurerm_api_management.main.gateway_url, "https://", ""), "/", "")
     probe_name            = "probe-apim"
+  }
+
+  # Settings for AGC backend (HTTP — AGC terminates internally)
+  backend_http_settings {
+    name                  = "settings-agc"
+    cookie_based_affinity = "Disabled"
+    port                  = 80
+    protocol              = "Http"
+    request_timeout       = 30
+    host_name             = azurerm_application_load_balancer_frontend.main.fully_qualified_domain_name
+    probe_name            = "probe-agc"
+  }
+
+  # Settings for NGINX ILB backend (HTTP)
+  backend_http_settings {
+    name                  = "settings-nginx"
+    cookie_based_affinity = "Disabled"
+    port                  = 80
+    protocol              = "Http"
+    request_timeout       = 30
+    probe_name            = "probe-nginx"
   }
 
   # ── Health Probes ─────────────────────────────────────────────
@@ -218,6 +251,32 @@ resource "azurerm_application_gateway" "main" {
     unhealthy_threshold = 3
     match {
       status_code = ["200-399"]
+    }
+  }
+
+  probe {
+    name                = "probe-agc"
+    protocol            = "Http"
+    path                = "/"
+    host                = azurerm_application_load_balancer_frontend.main.fully_qualified_domain_name
+    interval            = 30
+    timeout             = 30
+    unhealthy_threshold = 3
+    match {
+      status_code = ["200-404"]
+    }
+  }
+
+  probe {
+    name                = "probe-nginx"
+    protocol            = "Http"
+    path                = "/health"
+    host                = local.nginx_ilb_ip
+    interval            = 30
+    timeout             = 30
+    unhealthy_threshold = 3
+    match {
+      status_code = ["200-404"]
     }
   }
 
@@ -256,6 +315,23 @@ resource "azurerm_application_gateway" "main" {
       paths                      = ["/api", "/api/*"]
       backend_address_pool_name  = "pool-apim"
       backend_http_settings_name = "settings-apim"
+    }
+
+    # Scenario B: Frontend on AKS — App Gateway → AGC → NGINX pods
+    # Static content bypasses APIM (no API policies needed)
+    path_rule {
+      name                       = "aks-app-rule"
+      paths                      = ["/aks-app", "/aks-app/*"]
+      backend_address_pool_name  = "pool-agc"
+      backend_http_settings_name = "settings-agc"
+    }
+
+    # Legacy routes — App Gateway → NGINX ILB (direct, no APIM)
+    path_rule {
+      name                       = "legacy-direct-rule"
+      paths                      = ["/legacy", "/legacy/*"]
+      backend_address_pool_name  = "pool-nginx"
+      backend_http_settings_name = "settings-nginx"
     }
   }
 

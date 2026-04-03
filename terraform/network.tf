@@ -9,31 +9,35 @@ resource "azurerm_virtual_network" "main" {
 # ─── Subnets ────────────────────────────────────────────────────
 
 resource "azurerm_subnet" "appgw" {
-  name                 = "snet-appgw"
-  resource_group_name  = azurerm_resource_group.main.name
-  virtual_network_name = azurerm_virtual_network.main.name
-  address_prefixes     = [var.subnet_cidrs["appgw"]]
+  name                            = "snet-appgw"
+  resource_group_name             = azurerm_resource_group.main.name
+  virtual_network_name            = azurerm_virtual_network.main.name
+  address_prefixes                = [var.subnet_cidrs["appgw"]]
+  default_outbound_access_enabled = false
 }
 
 resource "azurerm_subnet" "pe" {
-  name                 = "snet-private-endpoints"
-  resource_group_name  = azurerm_resource_group.main.name
-  virtual_network_name = azurerm_virtual_network.main.name
-  address_prefixes     = [var.subnet_cidrs["pe"]]
+  name                            = "snet-private-endpoints"
+  resource_group_name             = azurerm_resource_group.main.name
+  virtual_network_name            = azurerm_virtual_network.main.name
+  address_prefixes                = [var.subnet_cidrs["pe"]]
+  default_outbound_access_enabled = false
 }
 
 resource "azurerm_subnet" "apim" {
-  name                 = "snet-apim"
-  resource_group_name  = azurerm_resource_group.main.name
-  virtual_network_name = azurerm_virtual_network.main.name
-  address_prefixes     = [var.subnet_cidrs["apim"]]
+  name                            = "snet-apim"
+  resource_group_name             = azurerm_resource_group.main.name
+  virtual_network_name            = azurerm_virtual_network.main.name
+  address_prefixes                = [var.subnet_cidrs["apim"]]
+  default_outbound_access_enabled = false
 }
 
 resource "azurerm_subnet" "agc" {
-  name                 = "snet-agc"
-  resource_group_name  = azurerm_resource_group.main.name
-  virtual_network_name = azurerm_virtual_network.main.name
-  address_prefixes     = [var.subnet_cidrs["agc"]]
+  name                            = "snet-agc"
+  resource_group_name             = azurerm_resource_group.main.name
+  virtual_network_name            = azurerm_virtual_network.main.name
+  address_prefixes                = [var.subnet_cidrs["agc"]]
+  default_outbound_access_enabled = false
 
   delegation {
     name = "agc-delegation"
@@ -45,17 +49,19 @@ resource "azurerm_subnet" "agc" {
 }
 
 resource "azurerm_subnet" "aks1" {
-  name                 = "snet-aks-cluster1"
-  resource_group_name  = azurerm_resource_group.main.name
-  virtual_network_name = azurerm_virtual_network.main.name
-  address_prefixes     = [var.subnet_cidrs["aks1"]]
+  name                            = "snet-aks-cluster1"
+  resource_group_name             = azurerm_resource_group.main.name
+  virtual_network_name            = azurerm_virtual_network.main.name
+  address_prefixes                = [var.subnet_cidrs["aks1"]]
+  default_outbound_access_enabled = false
 }
 
 resource "azurerm_subnet" "aks2" {
-  name                 = "snet-aks-cluster2"
-  resource_group_name  = azurerm_resource_group.main.name
-  virtual_network_name = azurerm_virtual_network.main.name
-  address_prefixes     = [var.subnet_cidrs["aks2"]]
+  name                            = "snet-aks-cluster2"
+  resource_group_name             = azurerm_resource_group.main.name
+  virtual_network_name            = azurerm_virtual_network.main.name
+  address_prefixes                = [var.subnet_cidrs["aks2"]]
+  default_outbound_access_enabled = false
 }
 
 # ─── NSG for APIM subnet (stv2 requirements) ───────────────────

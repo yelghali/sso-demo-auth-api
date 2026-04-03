@@ -27,6 +27,11 @@ MOCK_DATA = {
         {"id": 2, "name": "Widget B", "price": 29.99, "category": "widgets", "stock": 89},
         {"id": 3, "name": "Gadget C", "price": 249.99, "category": "gadgets", "stock": 23},
     ],
+    "legacy": [
+        {"id": 1, "system": "ERP", "endpoint": "/api/v1/invoices", "status": "active"},
+        {"id": 2, "system": "CRM", "endpoint": "/api/v1/contacts", "status": "active"},
+        {"id": 3, "system": "HR", "endpoint": "/api/v1/employees", "status": "deprecated"},
+    ],
 }
 
 

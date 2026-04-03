@@ -45,6 +45,15 @@ resource "azurerm_api_management_backend" "traefik" {
   url                 = "http://${local.traefik_ilb_ip}"
 }
 
+# ─── APIM: NGINX ILB Backend (legacy APIs on Cluster 1) ───────
+resource "azurerm_api_management_backend" "nginx" {
+  name                = "nginx-backend"
+  resource_group_name = azurerm_resource_group.main.name
+  api_management_name = azurerm_api_management.main.name
+  protocol            = "http"
+  url                 = "http://${local.nginx_ilb_ip}"
+}
+
 # ─── APIM API: AGC-routed APIs ─────────────────────────────────
 resource "azurerm_api_management_api" "agc" {
   name                  = "agc-apis"
@@ -93,6 +102,35 @@ resource "azurerm_api_management_api_operation" "traefik_catchall" {
   api_management_name = azurerm_api_management.main.name
   resource_group_name = azurerm_resource_group.main.name
   display_name        = "Catch-All (Traefik)"
+  method              = "GET"
+  url_template        = "/{*path}"
+
+  template_parameter {
+    name     = "path"
+    type     = "string"
+    required = true
+  }
+}
+
+# ─── APIM API: NGINX-routed APIs (legacy on Cluster 1) ─────────
+resource "azurerm_api_management_api" "nginx" {
+  name                  = "nginx-apis"
+  resource_group_name   = azurerm_resource_group.main.name
+  api_management_name   = azurerm_api_management.main.name
+  revision              = "1"
+  display_name          = "APIs via NGINX (Cluster 1 — Legacy)"
+  path                  = "api/nginx"
+  protocols             = ["https", "http"]
+  subscription_required = false
+  service_url           = "http://${local.nginx_ilb_ip}"
+}
+
+resource "azurerm_api_management_api_operation" "nginx_catchall" {
+  operation_id        = "nginx-catchall"
+  api_name            = azurerm_api_management_api.nginx.name
+  api_management_name = azurerm_api_management.main.name
+  resource_group_name = azurerm_resource_group.main.name
+  display_name        = "Catch-All (NGINX)"
   method              = "GET"
   url_template        = "/{*path}"
 

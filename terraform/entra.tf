@@ -13,6 +13,7 @@ resource "azuread_application" "main" {
       "https://${local.hostname}/app1/",
       "https://${local.hostname}/app2/",
       "https://${local.hostname}/app3/",
+      "https://${local.hostname}/aks-app/",
     ]
   }
 

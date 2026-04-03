@@ -45,6 +45,16 @@ output "traefik_ilb_ip" {
   value = local.traefik_ilb_ip
 }
 
+output "nginx_ilb_ip" {
+  value       = local.nginx_ilb_ip
+  description = "NGINX Ingress internal LB IP on Cluster 1"
+}
+
+output "aks_frontend_url" {
+  value       = "https://${local.hostname}/aks-app"
+  description = "Frontend hosted on AKS (via AGC, bypassing APIM)"
+}
+
 output "storage_accounts" {
   value = { for k, v in azurerm_storage_account.frontend : k => v.name }
 }

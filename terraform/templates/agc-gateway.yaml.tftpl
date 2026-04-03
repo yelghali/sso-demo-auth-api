@@ -13,7 +13,7 @@ spec:
       protocol: HTTP
       allowedRoutes:
         namespaces:
-          from: Same
+          from: All
   addresses:
     - type: alb.networking.azure.io/alb-frontend
       value: ${frontend_name}
@@ -26,6 +26,7 @@ metadata:
 spec:
   parentRefs:
     - name: agc-gateway
+      namespace: ${namespace}
   rules:
     - matches:
         - path:
@@ -43,6 +44,7 @@ metadata:
 spec:
   parentRefs:
     - name: agc-gateway
+      namespace: ${namespace}
   rules:
     - matches:
         - path:
@@ -60,6 +62,7 @@ metadata:
 spec:
   parentRefs:
     - name: agc-gateway
+      namespace: ${namespace}
   rules:
     - matches:
         - path:
@@ -68,3 +71,28 @@ spec:
       backendRefs:
         - name: api-products
           port: 8080
+---
+# ── Frontend route: App Gateway → AGC → frontend pods (no APIM) ──
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: frontend-route
+  namespace: frontend
+spec:
+  parentRefs:
+    - name: agc-gateway
+      namespace: ${namespace}
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /aks-app
+      filters:
+        - type: URLRewrite
+          urlRewrite:
+            path:
+              type: ReplacePrefixMatch
+              replacePrefixMatch: /
+      backendRefs:
+        - name: frontend
+          port: 80
