@@ -148,6 +148,19 @@ resource "azurerm_network_security_group" "apim" {
     source_address_prefix      = "VirtualNetwork"
     destination_address_prefix = "AzureActiveDirectory"
   }
+
+  # Outbound: VNet (HTTP — required for APIM to reach AKS backends)
+  security_rule {
+    name                       = "AllowVNetOutbound80"
+    priority                   = 130
+    direction                  = "Outbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = "80"
+    source_address_prefix      = "VirtualNetwork"
+    destination_address_prefix = "VirtualNetwork"
+  }
 }
 
 resource "azurerm_subnet_network_security_group_association" "apim" {

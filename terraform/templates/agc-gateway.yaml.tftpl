@@ -72,12 +72,14 @@ spec:
         - name: api-products
           port: 8080
 ---
-# ── Frontend route: App Gateway → AGC → frontend pods (no APIM) ──
+# ── Routes forwarded to NGINX Ingress Controller ──
+# NGINX Ingress handles /aks-app and /legacy via its own Ingress rules.
+# AGC forwards these paths to the NGINX Ingress Controller service.
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
-  name: frontend-route
-  namespace: frontend
+  name: nginx-frontend-route
+  namespace: ingress-nginx
 spec:
   parentRefs:
     - name: agc-gateway
@@ -87,12 +89,24 @@ spec:
         - path:
             type: PathPrefix
             value: /aks-app
-      filters:
-        - type: URLRewrite
-          urlRewrite:
-            path:
-              type: ReplacePrefixMatch
-              replacePrefixMatch: /
       backendRefs:
-        - name: frontend
+        - name: ingress-nginx-controller
+          port: 80
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: nginx-legacy-route
+  namespace: ingress-nginx
+spec:
+  parentRefs:
+    - name: agc-gateway
+      namespace: ${namespace}
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /legacy
+      backendRefs:
+        - name: ingress-nginx-controller
           port: 80

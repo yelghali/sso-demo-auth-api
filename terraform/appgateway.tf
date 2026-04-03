@@ -220,6 +220,7 @@ resource "azurerm_application_gateway" "main" {
     port                  = 80
     protocol              = "Http"
     request_timeout       = 30
+    host_name             = local.nginx_ilb_ip
     probe_name            = "probe-nginx"
   }
 
@@ -268,13 +269,13 @@ resource "azurerm_application_gateway" "main" {
   }
 
   probe {
-    name                = "probe-nginx"
-    protocol            = "Http"
-    path                = "/health"
-    host                = local.nginx_ilb_ip
-    interval            = 30
-    timeout             = 30
-    unhealthy_threshold = 3
+    name                                      = "probe-nginx"
+    protocol                                  = "Http"
+    path                                      = "/healthz"
+    pick_host_name_from_backend_http_settings = true
+    interval                                  = 30
+    timeout                                   = 30
+    unhealthy_threshold                       = 3
     match {
       status_code = ["200-404"]
     }
@@ -317,21 +318,21 @@ resource "azurerm_application_gateway" "main" {
       backend_http_settings_name = "settings-apim"
     }
 
-    # Scenario B: Frontend on AKS — App Gateway → AGC → NGINX pods
-    # Static content bypasses APIM (no API policies needed)
+    # Scenario B: Frontend on AKS — App Gateway → APIM → NGINX ILB → NGINX pods
+    # Static frontend served by NGINX Ingress, routed via APIM
     path_rule {
       name                       = "aks-app-rule"
       paths                      = ["/aks-app", "/aks-app/*"]
-      backend_address_pool_name  = "pool-agc"
-      backend_http_settings_name = "settings-agc"
+      backend_address_pool_name  = "pool-apim"
+      backend_http_settings_name = "settings-apim"
     }
 
-    # Legacy routes — App Gateway → NGINX ILB (direct, no APIM)
+    # Legacy routes — App Gateway → APIM → NGINX ILB
     path_rule {
       name                       = "legacy-direct-rule"
       paths                      = ["/legacy", "/legacy/*"]
-      backend_address_pool_name  = "pool-nginx"
-      backend_http_settings_name = "settings-nginx"
+      backend_address_pool_name  = "pool-apim"
+      backend_http_settings_name = "settings-apim"
     }
   }
 

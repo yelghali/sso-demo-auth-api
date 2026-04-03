@@ -141,6 +141,84 @@ resource "azurerm_api_management_api_operation" "nginx_catchall" {
   }
 }
 
+# ─── APIM API: AKS Frontend (NGINX-served static content) ──────
+resource "azurerm_api_management_api" "aks_frontend" {
+  name                  = "aks-frontend"
+  resource_group_name   = azurerm_resource_group.main.name
+  api_management_name   = azurerm_api_management.main.name
+  revision              = "1"
+  display_name          = "AKS Frontend via NGINX"
+  path                  = "aks-app"
+  protocols             = ["https", "http"]
+  subscription_required = false
+  service_url           = "http://${azurerm_application_load_balancer_frontend.main.fully_qualified_domain_name}/aks-app"
+}
+
+resource "azurerm_api_management_api_operation" "aks_frontend_root" {
+  operation_id        = "aks-frontend-root"
+  api_name            = azurerm_api_management_api.aks_frontend.name
+  api_management_name = azurerm_api_management.main.name
+  resource_group_name = azurerm_resource_group.main.name
+  display_name        = "AKS Frontend Root"
+  method              = "GET"
+  url_template        = "/"
+}
+
+resource "azurerm_api_management_api_operation" "aks_frontend_catchall" {
+  operation_id        = "aks-frontend-catchall"
+  api_name            = azurerm_api_management_api.aks_frontend.name
+  api_management_name = azurerm_api_management.main.name
+  resource_group_name = azurerm_resource_group.main.name
+  display_name        = "AKS Frontend Catch-All"
+  method              = "GET"
+  url_template        = "/{*path}"
+
+  template_parameter {
+    name     = "path"
+    type     = "string"
+    required = true
+  }
+}
+
+# ─── APIM API: Legacy via NGINX ────────────────────────────────
+resource "azurerm_api_management_api" "legacy" {
+  name                  = "legacy-apis"
+  resource_group_name   = azurerm_resource_group.main.name
+  api_management_name   = azurerm_api_management.main.name
+  revision              = "1"
+  display_name          = "Legacy via NGINX"
+  path                  = "legacy"
+  protocols             = ["https", "http"]
+  subscription_required = false
+  service_url           = "http://${azurerm_application_load_balancer_frontend.main.fully_qualified_domain_name}/legacy"
+}
+
+resource "azurerm_api_management_api_operation" "legacy_root" {
+  operation_id        = "legacy-root"
+  api_name            = azurerm_api_management_api.legacy.name
+  api_management_name = azurerm_api_management.main.name
+  resource_group_name = azurerm_resource_group.main.name
+  display_name        = "Legacy Root"
+  method              = "GET"
+  url_template        = "/"
+}
+
+resource "azurerm_api_management_api_operation" "legacy_catchall" {
+  operation_id        = "legacy-catchall"
+  api_name            = azurerm_api_management_api.legacy.name
+  api_management_name = azurerm_api_management.main.name
+  resource_group_name = azurerm_resource_group.main.name
+  display_name        = "Legacy Catch-All"
+  method              = "GET"
+  url_template        = "/{*path}"
+
+  template_parameter {
+    name     = "path"
+    type     = "string"
+    required = true
+  }
+}
+
 # ─── APIM CORS Policy (allow frontend to call APIs) ────────────
 resource "azurerm_api_management_policy" "global" {
   api_management_id = azurerm_api_management.main.id

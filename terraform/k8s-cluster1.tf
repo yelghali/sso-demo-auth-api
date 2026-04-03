@@ -273,7 +273,7 @@ resource "kubernetes_ingress_v1" "nginx_legacy" {
 
 # ─── Frontend on AKS (static HTML served by NGINX container) ──
 # Demonstrates hosting static frontend files inside AKS,
-# routed via AGC (bypassing APIM for static content).
+# routed via NGINX Ingress Controller (bypassing APIM for static content).
 
 resource "kubernetes_namespace_v1" "frontend" {
   provider = kubernetes.cluster1
@@ -374,6 +374,42 @@ resource "kubernetes_service_v1" "frontend" {
     }
     type = "ClusterIP"
   }
+}
+
+# ── NGINX Ingress for Frontend (static content via NGINX ILB) ──
+resource "kubernetes_ingress_v1" "nginx_frontend" {
+  provider = kubernetes.cluster1
+
+  metadata {
+    name      = "ingress-frontend"
+    namespace = kubernetes_namespace_v1.frontend.metadata[0].name
+    annotations = {
+      "nginx.ingress.kubernetes.io/rewrite-target" = "/$2"
+    }
+  }
+
+  spec {
+    ingress_class_name = "nginx"
+
+    rule {
+      http {
+        path {
+          path      = "/aks-app(/|$)(.*)"
+          path_type = "ImplementationSpecific"
+          backend {
+            service {
+              name = "frontend"
+              port {
+                number = 80
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  depends_on = [helm_release.nginx_ingress_cluster1]
 }
 
 # ── Gateway API Resources (applied via kubectl) ────────────────

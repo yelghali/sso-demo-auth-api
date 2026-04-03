@@ -301,16 +301,20 @@ curl -k "https://<APP_GW_IP>.sslip.io/api/agc/orders"
 
 ---
 
-## Scenario B — Frontend on AKS (App Gateway → AGC → NGINX pod)
+## Scenario B — Frontend on AKS (App Gateway → APIM → AGC → NGINX Ingress → pod)
 
-**Use case:** Serve static HTML/JS/CSS from an NGINX container on AKS instead of Azure Storage. The frontend doesn't need APIM policies, so it goes directly from App Gateway through AGC to the pod.
+**Use case:** Serve static HTML/JS/CSS from an NGINX container on AKS instead of Azure Storage. The NGINX Ingress Controller handles the internal routing while AGC provides the external-facing L7 entry point that APIM can reach.
 
-### Why bypass APIM for static content?
+### Why NGINX Ingress for the frontend?
 
-- APIM is designed for API management (rate limiting, auth policies, analytics)
-- Static files don't benefit from API policies
-- Direct routing avoids unnecessary latency and cost
-- App Gateway WAF still protects the static content
+- NGINX Ingress is already deployed for legacy services — reuse the same controller
+- Standard Kubernetes Ingress resources, no Gateway API CRDs needed for app teams
+- NGINX Ingress handles path rewriting, headers, and other L7 features internally
+- AGC acts as the bridge between APIM and the NGINX Ingress Controller
+
+### Why not App Gateway → NGINX ILB directly?
+
+Azure Standard Internal Load Balancers have cross-subnet connectivity limitations with App Gateway probes. Routing through APIM → AGC → NGINX Ingress avoids this while keeping the architecture clean.
 
 ### Traffic Flow
 
@@ -320,11 +324,17 @@ Browser
   ▼
 App Gateway (WAF_v2)
   │ Path: /aks-app/*
-  │ Backend: AGC frontend (HTTP)
+  │ Backend: APIM (internal)
+  ▼
+APIM (Internal VNet)
+  │ API: aks-app → AGC frontend
   ▼
 AGC (App Gateway for Containers)
-  │ HTTPRoute: /aks-app → frontend service
-  │ URL rewrite: strip /aks-app prefix
+  │ HTTPRoute: /aks-app → ingress-nginx-controller
+  ▼
+NGINX Ingress Controller (AKS Cluster 1)
+  │ Ingress rule: /aks-app → frontend service
+  │ Rewrite: strip /aks-app prefix
   ▼
 NGINX Pod (AKS Cluster 1)
   │ Serves static HTML from ConfigMap
@@ -406,17 +416,67 @@ resource "kubernetes_service_v1" "frontend" {
 }
 ```
 
-### Step 2 — Add the HTTPRoute for AGC
+### Step 2 — Add the NGINX Ingress for the Frontend
 
-The AGC Gateway listener allows routes from all namespaces (`from: All`), so the `frontend` namespace can attach routes to the gateway in `demo-apis`.
+The NGINX Ingress Controller is already deployed on Cluster 1 (for legacy services). We add an Ingress resource in the `frontend` namespace pointing to the same `nginx` ingress class.
+
+```hcl
+# terraform/k8s-cluster1.tf
+resource "kubernetes_ingress_v1" "nginx_frontend" {
+  provider = kubernetes.cluster1
+
+  metadata {
+    name      = "ingress-frontend"
+    namespace = kubernetes_namespace_v1.frontend.metadata[0].name
+    annotations = {
+      "nginx.ingress.kubernetes.io/rewrite-target" = "/$2"
+    }
+  }
+
+  spec {
+    ingress_class_name = "nginx"
+
+    rule {
+      http {
+        path {
+          path      = "/aks-app(/|$)(.*)"
+          path_type = "ImplementationSpecific"
+          backend {
+            service {
+              name = "frontend"
+              port { number = 80 }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+### Step 3 — Route App Gateway → APIM → AGC → NGINX Ingress
+
+The path `/aks-app` is routed through APIM to AGC, which forwards to the NGINX Ingress Controller service.
+
+```hcl
+# terraform/appgateway.tf — path rule in url_path_map
+path_rule {
+  name                       = "aks-app-rule"
+  paths                      = ["/aks-app", "/aks-app/*"]
+  backend_address_pool_name  = "pool-apim"
+  backend_http_settings_name = "settings-apim"
+}
+```
+
+AGC HTTPRoute forwards `/aks-app` to the NGINX Ingress Controller:
 
 ```yaml
-# templates/agc-gateway.yaml.tftpl (added section)
+# templates/agc-gateway.yaml.tftpl
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
-  name: frontend-route
-  namespace: frontend
+  name: nginx-frontend-route
+  namespace: ingress-nginx
 spec:
   parentRefs:
     - name: agc-gateway
@@ -426,43 +486,9 @@ spec:
         - path:
             type: PathPrefix
             value: /aks-app
-      filters:
-        - type: URLRewrite
-          urlRewrite:
-            path:
-              type: ReplacePrefixMatch
-              replacePrefixMatch: /
       backendRefs:
-        - name: frontend
+        - name: ingress-nginx-controller
           port: 80
-```
-
-### Step 3 — Add App Gateway Backend for AGC
-
-```hcl
-# terraform/appgateway.tf — new backend pool pointing to AGC
-backend_address_pool {
-  name  = "pool-agc"
-  fqdns = [azurerm_application_load_balancer_frontend.main.fully_qualified_domain_name]
-}
-
-backend_http_settings {
-  name                  = "settings-agc"
-  cookie_based_affinity = "Disabled"
-  port                  = 80
-  protocol              = "Http"
-  request_timeout       = 30
-  host_name             = azurerm_application_load_balancer_frontend.main.fully_qualified_domain_name
-  probe_name            = "probe-agc"
-}
-
-# Path rule in url_path_map
-path_rule {
-  name                       = "aks-app-rule"
-  paths                      = ["/aks-app", "/aks-app/*"]
-  backend_address_pool_name  = "pool-agc"
-  backend_http_settings_name = "settings-agc"
-}
 ```
 
 ### Step 4 — Validate
@@ -485,7 +511,7 @@ curl -k "https://<APP_GW_IP>.sslip.io/aks-app"
 | SPA calling backend APIs          | APIs go through APIM      | ❌ Don't mix       |
 | Server-side rendered app          | ✅ Route directly          | Only if it IS an API|
 
-**Recommendation:** Route static frontends directly (App Gateway → AGC → Pod). Route API calls through APIM.
+**Recommendation:** Route static frontends via NGINX Ingress (App Gateway → APIM → AGC → NGINX Ingress → Pod). Route API calls through APIM → AGC directly.
 
 ---
 
@@ -514,10 +540,9 @@ AGC and NGINX Ingress use **different controllers and different CRDs**:
  AGC Frontend ─────►│ Gateway API ──► api-orders (port 8080)   │
  (Azure-managed)    │              ──► api-users  (port 8080)  │
                     │              ──► api-products (port 8080)│
-                    │              ──► frontend    (port 80)   │
                     │                                          │
  NGINX ILB ────────►│ Ingress     ──► legacy-app  (port 8080)  │
- (10.0.16.100)      │ (class=nginx)                            │
+ (10.0.16.100)      │ (class=nginx)──► frontend    (port 80)   │
                     └──────────────────────────────────────────┘
 ```
 
@@ -737,7 +762,7 @@ curl -k "https://<APP_GW_IP>.sslip.io/api/nginx/legacy"
 | `agc.tf`                        | App Gateway for Containers, ALB controller identity     |
 | `apim.tf`                       | APIM instance, backends (AGC, Traefik, NGINX), APIs    |
 | `appgateway.tf`                 | App Gateway v2 WAF, backend pools, path routing         |
-| `k8s-cluster1.tf`              | Cluster 1 workloads: ALB controller, APIs, NGINX ingress, frontend |
+| `k8s-cluster1.tf`              | Cluster 1 workloads: ALB controller, APIs, NGINX ingress, legacy app, frontend |
 | `k8s-cluster2.tf`              | Cluster 2 workloads: Traefik, APIs                      |
 | `storage.tf`                    | Storage accounts for static websites                    |
 | `entra.tf`                      | Entra ID app registration                               |
