@@ -1,0 +1,47 @@
+{
+  "id": "evalrun_703b7c8fcb7b4df198d18114a57731da",
+  "created_at": 1776778136,
+  "data_source": {
+    "source": {
+      "id": "azureai://accounts/my-foundry-yaya/projects/proj-default/data/eval-data-2026-04-21_132842_91054_UTC/versions/1",
+      "type": "file_id"
+    },
+    "type": "completions",
+    "input_messages": {
+      "template": [
+        {
+          "content": "{{item.prompt}}",
+          "role": "user",
+          "phase": null,
+          "type": "message"
+        }
+      ],
+      "type": "template"
+    },
+    "model": "gpt-4o-mini",
+    "sampling_params": null
+  },
+  "error": {
+    "code": "SystemError",
+    "message": "Evaluation system error: (InternalError) AOAI evaluation run eval_69e77b9a45cc81919098840b9faaaebe/evalrun_69e77b9cf4e8819194e0463d475e8505 failed with status failed."
+  },
+  "eval_id": "eval_607a19ef559e4d8c8925796f5dcc4202",
+  "metadata": {
+    "is_inline_dataset": "true",
+    "has_nested_data": "False",
+    "trigger_type": "oneoff"
+  },
+  "model": null,
+  "name": "Cloud-RedTeam-Run",
+  "object": "eval.run",
+  "per_model_usage": [],
+  "per_testing_criteria_results": [],
+  "report_url": "https://ai.azure.com/nextgen/r/KS5i5lSoTGq5lgyD-Mwp0A,foundry,,my-foundry-yaya,proj-default/build/evaluations/eval_607a19ef559e4d8c8925796f5dcc4202/run/evalrun_703b7c8fcb7b4df198d18114a57731da",
+  "result_counts": {
+    "errored": 0,
+    "failed": 0,
+    "passed": 0,
+    "total": 0
+  },
+  "status": "failed"
+}
